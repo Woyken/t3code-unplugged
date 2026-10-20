@@ -339,7 +339,16 @@ jobs:
         working-directory: upstream/apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease --no-daemon
+          for attempt in 1 2 3; do
+            echo "Gradle build attempt $attempt"
+            if ./gradlew :app:assembleRelease --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 30
+          done
 
       - name: Collect APK
         shell: bash
