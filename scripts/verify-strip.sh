@@ -12,7 +12,7 @@ fail() {
   exit 1
 }
 
-grep -q "export const hasCloudPublicConfig = false;" \
+grep -q "export const hasCloudPublicConfig: boolean = false;" \
   apps/server/src/cloud/publicConfig.ts ||
   fail "server cloud config is still configurable"
 
@@ -42,6 +42,9 @@ grep -q "return false;" apps/web/src/cloud/publicConfig.ts ||
 
 grep -q "return false;" apps/mobile/src/features/cloud/publicConfig.ts ||
   fail "mobile cloud UI is still configurable"
+
+grep -q "Unplugged build: no OTA checks" apps/mobile/app.config.ts ||
+  fail "mobile OTA updates are still enabled"
 
 ! grep -q "repoEnv.VITE_CLERK" apps/web/vite.config.ts ||
   fail "web build still injects cloud config"

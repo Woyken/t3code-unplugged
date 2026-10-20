@@ -92,7 +92,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -125,12 +125,14 @@ jobs:
 
       - name: Build server bundle and web client
         working-directory: upstream
-        env:
-          T3CODE_TELEMETRY_CHANNEL: dev
         run: vp run --filter t3 build
 
       - name: Build CLI executable
         working-directory: upstream
+        env:
+          # The SEA host must be Node 25.7+; keep in step with SEA_NODE_VERSION
+          # in apps/server/vite.config.ts.
+          VP_NODE_VERSION: "26.8.2"
         run: node apps/server/scripts/cli.ts build-exe --target linux-x64
 
       - name: Build resource monitor
@@ -172,7 +174,7 @@ jobs:
     needs: [resolve, linux-cli]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -232,9 +234,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifact
-          cp upstream/release/*.exe artifact/
-          # No update manifest: unplugged builds are installed manually.
-          rm -f upstream/release/latest.yml upstream/release/*.blockmap
+          installer="$(ls upstream/release/*.exe | head -n 1)"
+          test -n "$installer"
+          cp "$installer" "artifact/T3-Code-Unplugged-${{ needs.resolve.outputs.version }}-x64.exe"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -248,10 +250,11 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       APP_VARIANT: production
       EXPO_NO_GIT_STATUS: "1"
+      EXPO_NO_DOTENV: "1"
       CI: "1"
       GRADLE_OPTS: "-Xmx6g -Dorg.gradle.daemon=false"
     steps:
@@ -285,7 +288,7 @@ jobs:
 
       - name: Generate Android project
         working-directory: upstream/apps/mobile
-        run: ../../node_modules/.bin/expo prebuild --clean --platform android --no-install
+        run: node node_modules/expo/bin/cli prebuild --clean --platform android --no-install
 
       - name: Build release APK
         working-directory: upstream/apps/mobile/android

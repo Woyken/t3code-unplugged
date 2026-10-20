@@ -1,3 +1,17 @@
+diff --git a/apps/mobile/app.config.ts b/apps/mobile/app.config.ts
+index 57717d2d84..25bec42b66 100644
+--- a/apps/mobile/app.config.ts
++++ b/apps/mobile/app.config.ts
+@@ -240,7 +240,8 @@ const config: ExpoConfig = {
+   icon: variant.assets.appIcon,
+   userInterfaceStyle: "automatic",
+   updates: {
+-    enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
++    // Unplugged build: no OTA checks against Expo's update service.
++    enabled: false,
+     url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+     checkAutomatically: "ON_LOAD",
+     fallbackToCacheTimeout: 0,
 diff --git a/apps/mobile/src/features/cloud/publicConfig.ts b/apps/mobile/src/features/cloud/publicConfig.ts
 index a91a8024d4..592c52e22f 100644
 --- a/apps/mobile/src/features/cloud/publicConfig.ts

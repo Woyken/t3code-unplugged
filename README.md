@@ -13,6 +13,7 @@ these patches.
 | Product analytics (PostHog) | `AnalyticsService` is a no-op and defaults off |
 | Relay tracing (Axiom) | relay tracing config resolves to `null` |
 | OpenTelemetry export (OTLP traces/metrics/logs) | `OtelEnvironment.load` reports disabled; Diagnostics export UI is gone |
+| Expo OTA updates (mobile) | mobile config sets `updates.enabled: false` |
 
 ## What a build keeps
 
@@ -43,9 +44,9 @@ Artifacts:
 - `t3code-unplugged-X.Y.Z-unplugged.N-android.apk` – Android APK
 - `SHA256SUMS`
 
-Windows builds are unsigned. Android builds use the debug keystore unless
-`ANDROID_KEYSTORE_BASE64` and its companion secrets are configured. Neither
-build ships an update feed manifest, so the app does not auto-update.
+Windows builds are unsigned, and the Android APK is debug-signed. The desktop
+build ships no update feed manifest and mobile OTA updates are disabled, so
+install new versions manually.
 
 ## Patches
 
