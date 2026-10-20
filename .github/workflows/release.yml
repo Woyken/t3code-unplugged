@@ -1,0 +1,362 @@
+name: Release
+
+on:
+  schedule:
+    # Upstream stable tags are picked up within the hour.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream stable tag to build (default: newest)"
+        required: false
+        type: string
+      force:
+        description: "Build even if this upstream tag already has a release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unplugged-release
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve upstream tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      upstream_tag: ${{ steps.resolve.outputs.upstream_tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag and version
+        id: resolve
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${INPUT_TAG}" ]]; then
+            upstream_tag="${INPUT_TAG}"
+          else
+            upstream_tag="$(git ls-remote --tags --refs https://github.com/pingdotgg/t3code.git 'v*' \
+              | awk '{print $2}' \
+              | sed 's#^refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1)"
+          fi
+          if [[ ! "${upstream_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: '${upstream_tag}' is not a stable tag like v1.2.3" >&2
+            exit 1
+          fi
+
+          existing="$(git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-unplugged.*" \
+            | awk '{print $2}' \
+            | sed 's#^refs/tags/##' \
+            | sort -V \
+            | tail -n 1)"
+
+          if [[ -n "${existing}" && "${FORCE}" != "true" ]]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${existing}" >> "$GITHUB_OUTPUT"
+            echo "Already released ${upstream_tag} as ${existing}; nothing to do."
+            exit 0
+          fi
+
+          if [[ -n "${existing}" ]]; then
+            last="${existing##*.}"
+            next=$((last + 1))
+          else
+            next=1
+          fi
+
+          version="${upstream_tag#v}-unplugged.${next}"
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=${upstream_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${upstream_tag} as v${version}."
+
+  linux-cli:
+    name: Linux CLI
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: true
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ needs.resolve.outputs.version }}"
+
+      - name: Build server bundle and web client
+        working-directory: upstream
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: vp run --filter t3 build
+
+      - name: Build CLI executable
+        working-directory: upstream
+        run: node apps/server/scripts/cli.ts build-exe --target linux-x64
+
+      - name: Build resource monitor
+        working-directory: upstream
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+
+      - name: Stage resource monitor
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$stage"
+          cp upstream/native/resource-monitor/target/release/t3-resource-monitor "$stage/"
+
+      - name: Build CLI archive
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch x64 \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+          node scripts/smoke-cli-archive.ts \
+            --archive release-cli/* \
+            --expect-version "${{ needs.resolve.outputs.version }}"
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-linux-x64
+          path: upstream/release-cli/*
+          if-no-files-found: error
+
+  windows-desktop:
+    name: Windows desktop
+    needs: [resolve, linux-cli]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: false
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Download Linux CLI archive for WSL
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-linux-x64
+          path: upstream/release-cli
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ needs.resolve.outputs.version }}"
+
+      - name: Build Windows installer
+        working-directory: upstream
+        shell: bash
+        env:
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          wsl_archive="$(ls release-cli/t3-*.tar.gz | head -n 1)"
+          node scripts/build-desktop-artifact.ts \
+            --platform win \
+            --target nsis \
+            --arch x64 \
+            --build-version "${{ needs.resolve.outputs.version }}" \
+            --output-dir release \
+            --wsl-runtime "$wsl_archive"
+
+      - name: Collect installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp upstream/release/*.exe artifact/
+          # No update manifest: unplugged builds are installed manually.
+          rm -f upstream/release/latest.yml upstream/release/*.blockmap
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: artifact/*.exe
+          if-no-files-found: error
+
+  android-apk:
+    name: Android APK
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      APP_VARIANT: production
+      EXPO_NO_GIT_STATUS: "1"
+      CI: "1"
+      GRADLE_OPTS: "-Xmx6g -Dorg.gradle.daemon=false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: false
+          run-install: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/mobile...
+
+      - name: Generate Android project
+        working-directory: upstream/apps/mobile
+        run: ../../node_modules/.bin/expo prebuild --clean --platform android --no-install
+
+      - name: Build release APK
+        working-directory: upstream/apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          apk="$(find upstream/apps/mobile/android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          test -n "$apk"
+          cp "$apk" "artifact/t3code-unplugged-${{ needs.resolve.outputs.version }}-android.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: artifact/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [resolve, linux-cli, windows-desktop, android-apk]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS
+
+      - name: Write release notes
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          Built from [pingdotgg/t3code ${UPSTREAM_TAG}](https://github.com/pingdotgg/t3code/tree/${UPSTREAM_TAG})
+          plus the unplugged patch series.
+
+          Removed from this build:
+
+          - T3 Connect accounts, environment links, managed tunnels, and the relay client
+          - Product analytics (PostHog)
+          - Relay tracing (Axiom)
+          - OpenTelemetry export to remote collectors
+
+          Kept: local/LAN/Tailscale access, pairing URLs, local logs and trace files,
+          and all provider and editor features.
+
+          Windows builds are unsigned and the Android APK uses the debug keystore.
+          There is no update feed; install new versions manually.
+          EOF
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: T3 Code Unplugged ${{ needs.resolve.outputs.version }}
+          body_path: notes.md
+          files: artifacts/*
+          make_latest: true

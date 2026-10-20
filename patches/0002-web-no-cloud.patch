@@ -1,0 +1,55 @@
+diff --git a/apps/web/src/cloud/publicConfig.ts b/apps/web/src/cloud/publicConfig.ts
+index 8c3b9073e3..4de2dbe16f 100644
+--- a/apps/web/src/cloud/publicConfig.ts
++++ b/apps/web/src/cloud/publicConfig.ts
+@@ -59,19 +59,13 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
+ }
+ 
+ export function resolveRelayTracingConfig() {
+-  const { relayTracing } = resolveCloudPublicConfig();
+-  return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
+-    ? {
+-        tracesUrl: relayTracing.tracesUrl,
+-        tracesDataset: relayTracing.tracesDataset,
+-        tracesToken: relayTracing.tracesToken,
+-      }
+-    : null;
++  // Unplugged build: relay tracing is removed.
++  return null;
+ }
+ 
+ export function hasCloudPublicConfig(): boolean {
+-  const config = resolveCloudPublicConfig();
+-  return Boolean(config.clerkPublishableKey && config.clerkJwtTemplate && config.relayUrl);
++  // Unplugged build: T3 Connect is removed, so no cloud UI may mount.
++  return false;
+ }
+ 
+ export function resolveRelayClerkTokenOptions() {
+diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
+index cf343e26a4..1b4fc7e968 100644
+--- a/apps/web/vite.config.ts
++++ b/apps/web/vite.config.ts
+@@ -35,13 +35,15 @@ const explicitHost = process.env.HOST?.trim();
+ const host = explicitHost || "localhost";
+ const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
+ const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
+-const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
+-const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
+-const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
+-const configuredClerkCliOAuthClientId = repoEnv.VITE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || "";
+-const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || "";
+-const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
+-const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
++// Unplugged build: cloud configuration is never injected, even if the
++// environment supplies it.
++const configuredRelayUrl = "";
++const configuredClerkPublishableKey = "";
++const configuredClerkJwtTemplate = "";
++const configuredClerkCliOAuthClientId = "";
++const configuredRelayTracingUrl = "";
++const configuredRelayTracingDataset = "";
++const configuredRelayTracingToken = "";
+ const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
+ const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
+ const configuredHostedAppUrl = (() => {

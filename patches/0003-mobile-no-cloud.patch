@@ -1,0 +1,33 @@
+diff --git a/apps/mobile/src/features/cloud/publicConfig.ts b/apps/mobile/src/features/cloud/publicConfig.ts
+index a91a8024d4..592c52e22f 100644
+--- a/apps/mobile/src/features/cloud/publicConfig.ts
++++ b/apps/mobile/src/features/cloud/publicConfig.ts
+@@ -74,8 +74,8 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig
+ }
+ 
+ export function hasCloudPublicConfig(): boolean {
+-  const config = resolveCloudPublicConfig();
+-  return Boolean(config.clerk.publishableKey && config.clerk.jwtTemplate && config.relay.url);
++  // Unplugged build: T3 Connect is removed, so no cloud screens may mount.
++  return false;
+ }
+ 
+ type Configured<T> = {
+@@ -87,13 +87,10 @@ type TracingPublicConfig = Omit<CloudPublicConfig, "observability"> & {
+ };
+ 
+ export function hasTracingPublicConfig(
+-  config: CloudPublicConfig = resolveCloudPublicConfig(),
+-): config is TracingPublicConfig {
+-  return Boolean(
+-    config.observability.tracesUrl &&
+-    config.observability.tracesDataset &&
+-    config.observability.tracesToken,
+-  );
++  _config: CloudPublicConfig = resolveCloudPublicConfig(),
++): _config is TracingPublicConfig {
++  // Unplugged build: relay tracing is removed.
++  return false;
+ }
+ 
+ export function resolveRelayClerkTokenOptions() {

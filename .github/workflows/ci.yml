@@ -1,0 +1,20 @@
+name: Patch check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply patches to the recorded base tag
+        run: ./scripts/check-patches.sh "$(cat upstream-base.txt)"

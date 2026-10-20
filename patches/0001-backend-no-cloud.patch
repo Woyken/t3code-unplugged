@@ -1,0 +1,130 @@
+diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
+index 0a90cca565..8feb4dccd2 100644
+--- a/apps/server/src/binCli.ts
++++ b/apps/server/src/binCli.ts
+@@ -2,7 +2,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+ import * as NodeServices from "@effect/platform-node/NodeServices";
+ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+-import { Argument, Command } from "effect/cli";
++import { Command } from "effect/cli";
+ import * as CliError from "effect/cli/CliError";
+ 
+ import * as NetService from "@t3tools/shared/Net";
+@@ -11,9 +11,7 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
+ import { authCommand } from "./cli/auth.ts";
+ import { appCommand } from "./cli/app.ts";
+ import { browserCommand } from "./cli/browser.ts";
+-import { connectCommand } from "./cli/connect.ts";
+ import { pairCommand } from "./cli/pair.ts";
+-import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
+ import { keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
+ import { sharedServerCommandFlags } from "./cli/config.ts";
+ import { projectCommand } from "./cli/project.ts";
+@@ -31,31 +29,7 @@ import { triageCommand } from "./cli/triage.ts";
+ 
+ const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
+ 
+-const connectPublicConfigMissingMessage =
+-  "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
+-
+-class ConnectPublicConfigMissingError extends CliError.UserError {
+-  override get message() {
+-    return connectPublicConfigMissingMessage;
+-  }
+-}
+-
+-const connectUnavailableCommand = Command.make("connect", {
+-  command: Argument.String("command").pipe(Argument.variadic),
+-}).pipe(
+-  Command.withDescription("T3 Connect is unavailable in builds without public configuration."),
+-  Command.unlisted,
+-  Command.withHandler(() =>
+-    Effect.fail(
+-      new CliError.ShowHelp({
+-        commandPath: ["t3", "connect"],
+-        errors: [new ConnectPublicConfigMissingError({ cause: connectPublicConfigMissingMessage })],
+-      }),
+-    ),
+-  ),
+-);
+-
+-export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
++export const makeCli = () =>
+   Command.make("t3", { ...sharedServerCommandFlags }).pipe(
+     Command.withDescription("Run the T3 Code server."),
+     Command.withHandler(runDefaultServerCommand),
+@@ -86,7 +60,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
+       themeCommand,
+       traceCommand,
+       triageCommand,
+-      cloudEnabled ? connectCommand : connectUnavailableCommand,
+     ]),
+   );
+ 
+diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
+index 903f4a88a1..346878ecbc 100644
+--- a/apps/server/src/cloud/publicConfig.ts
++++ b/apps/server/src/cloud/publicConfig.ts
+@@ -40,15 +40,6 @@ function readBuildTimeValue(value: string | undefined): string {
+   return typeof value === "undefined" ? "" : value.trim();
+ }
+ 
+-function normalizeSecureUrl(value: string): string | null {
+-  try {
+-    const url = new URL(value);
+-    return url.protocol === "https:" ? url.toString() : null;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+ const buildTimeRelayUrl =
+   typeof __T3CODE_BUILD_RELAY_URL__ === "undefined"
+     ? ""
+@@ -82,17 +73,11 @@ const buildTimeRelayClientTracing = {
+ } as const;
+ 
+ export function resolveRelayClientTracingConfig(
+-  env: Readonly<Record<string, string | undefined>> = process.env,
+-  fallback = buildTimeRelayClientTracing,
++  _env: Readonly<Record<string, string | undefined>> = process.env,
++  _fallback = buildTimeRelayClientTracing,
+ ) {
+-  const tracesUrl = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() || fallback.tracesUrl;
+-  const tracesDataset =
+-    env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() || fallback.tracesDataset;
+-  const tracesToken = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() || fallback.tracesToken;
+-  const normalizedTracesUrl = normalizeSecureUrl(tracesUrl);
+-  return normalizedTracesUrl && tracesDataset && tracesToken
+-    ? { tracesUrl: normalizedTracesUrl, tracesDataset, tracesToken }
+-    : null;
++  // Unplugged build: relay tracing is removed.
++  return null;
+ }
+ 
+ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
+@@ -211,8 +196,5 @@ export function makeCloudCliOAuthConfig({
+ 
+ export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
+ 
+-export const hasCloudPublicConfig = Boolean(
+-  (normalizeSecureRelayUrl(process.env.T3CODE_RELAY_URL ?? "") ?? buildTimeRelayUrl) &&
+-  (process.env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() || buildTimeClerkPublishableKey) &&
+-  (process.env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || buildTimeClerkCliOAuthClientId),
+-);
++// Unplugged build: T3 Connect is removed, so nothing cloud-gated may turn on.
++export const hasCloudPublicConfig = false;
+diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
+index 23981a932e..4ade537b67 100644
+--- a/apps/server/src/server.ts
++++ b/apps/server/src/server.ts
+@@ -852,6 +852,8 @@ const layerMakeServer = Layer.unwrap(
+     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
+       Effect.gen(function* () {
+         const cloudLink = yield* CloudLink.CloudLink;
++        // Unplugged build: never reconcile or start a T3 Connect tunnel.
++        if (!hasCloudPublicConfig) return;
+         const releaseManagedTunnel = cloudLink.releaseManagedTunnelOnShutdown().pipe(
+           Effect.timeout("10 seconds"),
+           Effect.tap((released) =>

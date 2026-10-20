@@ -1,0 +1,72 @@
+diff --git a/apps/web/src/components/settings/DiagnosticsSettings.tsx b/apps/web/src/components/settings/DiagnosticsSettings.tsx
+index 94e82775c9..991191fdfb 100644
+--- a/apps/web/src/components/settings/DiagnosticsSettings.tsx
++++ b/apps/web/src/components/settings/DiagnosticsSettings.tsx
+@@ -38,7 +38,6 @@ import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
+ import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+ import { useAtomCommand } from "../../state/use-atom-command";
+ import { useSettingsScope } from "./SettingsScopeContext";
+-import { TelemetryExportSettings } from "./TelemetryExportSettings";
+ 
+ const NUMBER_FORMAT = new Intl.NumberFormat();
+ 
+@@ -1351,7 +1350,6 @@ export function DiagnosticsSettingsPanel() {
+           <EmptyRows label={isInitialLoading ? "Loading span names..." : "No spans found."} />
+         )}
+       </SettingsSection>
+-      {exportFormEnvironmentId === environmentId && <TelemetryExportSettings />}
+     </SettingsPageContainer>
+   );
+ }
+diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
+index 5747fc59d9..e53a4ba4e6 100644
+--- a/apps/web/src/components/settings/settingsSearch.ts
++++ b/apps/web/src/components/settings/settingsSearch.ts
+@@ -576,14 +576,6 @@ export const SETTINGS_SEARCH_ITEMS = [
+     to: "/settings/general",
+     searchTerms: ["telemetry analytics usage data tracking legal opt out"],
+   },
+-  {
+-    id: "telemetry-export",
+-    title: "OpenTelemetry export",
+-    to: "/settings/diagnostics",
+-    targetId: "telemetry-export",
+-    scope: "environment",
+-    searchTerms: ["OTel OTLP telemetry export endpoints logs traces metrics Grafana"],
+-  },
+   {
+     id: "diagnostics",
+     title: "Diagnostics",
+diff --git a/packages/shared/src/otelEnvironment.ts b/packages/shared/src/otelEnvironment.ts
+index 9e0f1ef2f3..7cb6bed2aa 100644
+--- a/packages/shared/src/otelEnvironment.ts
++++ b/packages/shared/src/otelEnvironment.ts
+@@ -290,7 +290,7 @@ const endpointSignal = (name: OtlpSignalName, own: Settings, generic: Settings):
+   };
+ };
+ 
+-export const load: Effect.Effect<OtelEnvironment> = Config.all({
++export const loadFromEnvironment: Effect.Effect<OtelEnvironment> = Config.all({
+   t3: flag(
+     "T3CODE_OTEL_SDK_DISABLED",
+     T3CODE_TRUE,
+@@ -358,6 +358,19 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
+   Effect.orDie,
+ );
+ 
++/**
++ * Unplugged build: OpenTelemetry export is removed, so every signal resolves to
++ * no endpoint. Local trace files and console logs are unaffected.
++ */
++export const load: Effect.Effect<OtelEnvironment> = Effect.succeed({
++  disabled: true,
++  warnings: [],
++  resourceAttributes: {},
++  traces: OtelSignal.Unset(),
++  metrics: OtelSignal.Unset(),
++  logs: OtelSignal.Unset(),
++});
++
+ export type SignalName = "traces" | "metrics" | "logs";
+ 
+ export interface SignalEndpoint {
