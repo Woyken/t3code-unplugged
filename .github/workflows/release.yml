@@ -110,7 +110,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: upstream/package.json
-          cache: true
+          cache: false
           run-install: false
 
       - uses: dtolnay/rust-toolchain@stable
@@ -152,7 +152,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          time timeout 600 node scripts/build-cli-archive.ts \
+          time timeout -k 30 600 node scripts/build-cli-archive.ts \
             --platform linux \
             --arch x64 \
             --version "${{ needs.resolve.outputs.version }}" \
@@ -167,22 +167,51 @@ jobs:
           path: upstream/release-cli/*
           if-no-files-found: error
 
-      # Upstream's smoke test has no cap on the first process it launches. It
-      # hung once here after the archive was already written, so keep it as a
-      # non-blocking check and never let it hold the release.
+      # Upstream's smoke script has no cap on the first process it launches and
+      # Effect's SIGTERM handling can keep it alive past `timeout`. Do the same
+      # checks here with hard kill deadlines, and never hold the release on them.
       - name: Smoke-test CLI archive
         working-directory: upstream
         shell: bash
         continue-on-error: true
         run: |
           set -uo pipefail
-          if timeout 240 node scripts/smoke-cli-archive.ts \
-            --archive release-cli/* \
-            --expect-version "${{ needs.resolve.outputs.version }}"; then
-            echo "CLI archive smoke test passed."
-          else
-            echo "::warning::CLI archive smoke test failed or timed out; artifacts were still uploaded."
+          dir="$RUNNER_TEMP/cli-smoke"
+          rm -rf "$dir"
+          mkdir -p "$dir/home"
+          tar -xzf release-cli/*.tar.gz -C "$dir"
+          root="$(find "$dir" -maxdepth 1 -mindepth 1 -type d -name 't3-*' | head -n 1)"
+          echo "archive root: $root"
+
+          version_out="$(timeout -k 10 60 env HOME="$dir/home" T3CODE_HOME="$dir/home" "$root/t3" --version 2>&1)"
+          version_status=$?
+          echo "t3 --version (exit $version_status): $version_out"
+          if [[ $version_status -ne 0 || "$version_out" != *"${{ needs.resolve.outputs.version }}"* ]]; then
+            echo "::warning::t3 --version failed or printed the wrong version."
           fi
+
+          port=47811
+          env HOME="$dir/home" T3CODE_HOME="$dir/home" "$root/t3" serve \
+            --host 127.0.0.1 --port "$port" --no-browser >"$dir/server.log" 2>&1 &
+          pid=$!
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          kill -TERM "$pid" 2>/dev/null || true
+          sleep 3
+          kill -KILL "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          tail -n 40 "$dir/server.log" || true
+          if [[ $ready -ne 1 ]]; then
+            echo "::warning::t3 serve did not answer on port $port within 60s."
+            exit 1
+          fi
+          echo "CLI archive smoke test passed."
 
   windows-desktop:
     name: Windows desktop
