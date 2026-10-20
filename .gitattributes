@@ -1,0 +1,2 @@
+# Keep patches and scripts LF on every checkout; git apply needs exact context.
+* text=auto eol=lf
