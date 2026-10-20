@@ -40,13 +40,14 @@ released.
 Artifacts:
 
 - `t3-X.Y.Z-unplugged.N-linux-x64.tar.gz` – standalone Linux CLI/server
-- `T3 Code Unplugged-X.Y.Z-unplugged.N-x64.exe` – Windows NSIS installer
+- `T3-Code-X.Y.Z-unplugged.N-x64.exe` – Windows NSIS installer
 - `t3code-unplugged-X.Y.Z-unplugged.N-android.apk` – Android APK
+- `latest.yml` + `T3-Code-X.Y.Z-unplugged.N-x64.exe.blockmap` – Windows updater metadata
 - `SHA256SUMS`
 
-Windows builds are unsigned, and the Android APK is debug-signed. The desktop
-build ships no update feed manifest and mobile OTA updates are disabled, so
-install new versions manually.
+Windows builds are unsigned, so SmartScreen may warn; the Android APK is
+debug-signed. Windows installs check this repository's releases for updates.
+Mobile OTA updates are disabled, and Linux/Android installs update manually.
 
 ## Patches
 

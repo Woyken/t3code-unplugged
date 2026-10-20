@@ -274,20 +274,30 @@ jobs:
             --output-dir release \
             --wsl-runtime "$wsl_archive"
 
-      - name: Collect installer
+      - name: Collect installer and updater metadata
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifact
           installer="$(ls upstream/release/*.exe | head -n 1)"
           test -n "$installer"
-          cp "$installer" "artifact/T3-Code-Unplugged-${{ needs.resolve.outputs.version }}-x64.exe"
+          manifest="upstream/release/latest.yml"
+          blockmap="${installer}.blockmap"
+          test -f "$manifest"
+          test -f "$blockmap"
+          # electron-updater downloads the URL in latest.yml verbatim, so the
+          # installer has to keep the name electron-builder gave it.
+          grep -Fq "url: $(basename "$installer")" "$manifest"
+          cp "$installer" artifact/
+          cp "$manifest" artifact/
+          cp "$blockmap" artifact/
+          ls -lh artifact/
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: artifact/*.exe
+          path: artifact/*
           if-no-files-found: error
 
   android-apk:
@@ -383,7 +393,14 @@ jobs:
 
       - name: Checksums
         working-directory: artifacts
-        run: sha256sum * > SHA256SUMS
+        run: |
+          set -euo pipefail
+          test -f latest.yml
+          installer="$(sed -n 's/^  - url: //p' latest.yml | head -n 1)"
+          test -n "$installer"
+          test -f "$installer"
+          test -f "$installer.blockmap"
+          sha256sum * > SHA256SUMS
 
       - name: Write release notes
         shell: bash
@@ -405,8 +422,9 @@ jobs:
           Kept: local/LAN/Tailscale access, pairing URLs, local logs and trace files,
           and all provider and editor features.
 
-          Windows builds are unsigned and the Android APK uses the debug keystore.
-          There is no update feed; install new versions manually.
+          Windows builds are unsigned (SmartScreen may warn) and the Android APK
+          uses the debug keystore. Windows installs check this repository's
+          releases for updates; Linux and Android update manually.
           EOF
 
       - name: Create release
