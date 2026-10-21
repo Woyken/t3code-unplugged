@@ -1,8 +1,8 @@
 diff --git a/apps/mobile/app.config.ts b/apps/mobile/app.config.ts
-index 57717d2d84..25bec42b66 100644
+index d1d0398e..1cbe74e3 100644
 --- a/apps/mobile/app.config.ts
 +++ b/apps/mobile/app.config.ts
-@@ -240,7 +240,8 @@ const config: ExpoConfig = {
+@@ -237,7 +237,8 @@ const config: ExpoConfig = {
    icon: variant.assets.appIcon,
    userInterfaceStyle: "automatic",
    updates: {
@@ -13,7 +13,7 @@ index 57717d2d84..25bec42b66 100644
      checkAutomatically: "ON_LOAD",
      fallbackToCacheTimeout: 0,
 diff --git a/apps/mobile/src/features/cloud/publicConfig.ts b/apps/mobile/src/features/cloud/publicConfig.ts
-index a91a8024d4..592c52e22f 100644
+index a91a8024..592c52e2 100644
 --- a/apps/mobile/src/features/cloud/publicConfig.ts
 +++ b/apps/mobile/src/features/cloud/publicConfig.ts
 @@ -74,8 +74,8 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig

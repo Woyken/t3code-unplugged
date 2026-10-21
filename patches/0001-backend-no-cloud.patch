@@ -1,8 +1,8 @@
 diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
-index 0a90cca565..8feb4dccd2 100644
+index b0a2ceff..a1e69233 100644
 --- a/apps/server/src/binCli.ts
 +++ b/apps/server/src/binCli.ts
-@@ -2,7 +2,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+@@ -3,7 +3,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
  import * as NodeServices from "@effect/platform-node/NodeServices";
  import * as Effect from "effect/Effect";
  import * as Layer from "effect/Layer";
@@ -11,17 +11,17 @@ index 0a90cca565..8feb4dccd2 100644
  import * as CliError from "effect/cli/CliError";
  
  import * as NetService from "@t3tools/shared/Net";
-@@ -11,9 +11,7 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
+@@ -12,9 +12,7 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
  import { authCommand } from "./cli/auth.ts";
  import { appCommand } from "./cli/app.ts";
  import { browserCommand } from "./cli/browser.ts";
 -import { connectCommand } from "./cli/connect.ts";
  import { pairCommand } from "./cli/pair.ts";
 -import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
- import { keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
+ import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
  import { sharedServerCommandFlags } from "./cli/config.ts";
  import { projectCommand } from "./cli/project.ts";
-@@ -31,31 +29,7 @@ import { triageCommand } from "./cli/triage.ts";
+@@ -32,31 +30,7 @@ import { triageCommand } from "./cli/triage.ts";
  
  const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
  
@@ -54,19 +54,49 @@ index 0a90cca565..8feb4dccd2 100644
    Command.make("t3", { ...sharedServerCommandFlags }).pipe(
      Command.withDescription("Run the T3 Code server."),
      Command.withHandler(runDefaultServerCommand),
-@@ -86,7 +60,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
-       themeCommand,
+@@ -88,7 +62,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
        traceCommand,
+       doctorCommand,
        triageCommand,
 -      cloudEnabled ? connectCommand : connectUnavailableCommand,
      ]),
    );
  
+diff --git a/apps/server/src/cloud/config.ts b/apps/server/src/cloud/config.ts
+index 90713806..a8d6ccbd 100644
+--- a/apps/server/src/cloud/config.ts
++++ b/apps/server/src/cloud/config.ts
+@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
+ import * as Schema from "effect/Schema";
+ 
+ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
++import { hasCloudPublicConfig } from "./publicConfig.ts";
+ 
+ export const CLOUD_MINT_PUBLIC_KEY = "cloud-mint-ed25519-public-key";
+ export const CLOUD_ENDPOINT_RUNTIME_CONFIG = "cloud-endpoint-runtime-config";
+@@ -52,6 +53,9 @@ export const readAgentActivityPublishingActive: (
+   secrets: ServerSecretStore.ServerSecretStore["Service"],
+ ) => Effect.Effect<boolean> = Effect.fn("config.readAgentActivityPublishingActive")(
+   function* (secrets: ServerSecretStore.ServerSecretStore["Service"]) {
++    // Unplugged build: relay publishing is removed, so the descriptor must not
++    // advertise a capability the publisher cannot use.
++    if (!hasCloudPublicConfig) return false;
+     const readSecretString = (name: string) =>
+       secrets
+         .get(name)
 diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
-index 903f4a88a1..efb1821bab 100644
+index 15594f11..e3ac8f4b 100644
 --- a/apps/server/src/cloud/publicConfig.ts
 +++ b/apps/server/src/cloud/publicConfig.ts
-@@ -40,15 +40,6 @@ function readBuildTimeValue(value: string | undefined): string {
+@@ -4,7 +4,6 @@ import {
+   DEFAULT_HOSTED_APP_URL,
+ } from "@t3tools/shared/connectAuth";
+ import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
+-import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
+ import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
+ import * as Config from "effect/Config";
+ import * as ConfigProvider from "effect/ConfigProvider";
+@@ -41,15 +40,6 @@ function readBuildTimeValue(value: string | undefined): string {
    return typeof value === "undefined" ? "" : value.trim();
  }
  
@@ -82,7 +112,7 @@ index 903f4a88a1..efb1821bab 100644
  const buildTimeRelayUrl =
    typeof __T3CODE_BUILD_RELAY_URL__ === "undefined"
      ? ""
-@@ -82,17 +73,11 @@ const buildTimeRelayClientTracing = {
+@@ -83,21 +73,11 @@ const buildTimeRelayClientTracing = {
  } as const;
  
  export function resolveRelayClientTracingConfig(
@@ -91,6 +121,10 @@ index 903f4a88a1..efb1821bab 100644
 +  _env: Readonly<Record<string, string | undefined>> = process.env,
 +  _fallback = buildTimeRelayClientTracing,
  ) {
+-  if (!isRelayTracingEnabled(env)) {
+-    return null;
+-  }
+-
 -  const tracesUrl = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() || fallback.tracesUrl;
 -  const tracesDataset =
 -    env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() || fallback.tracesDataset;
@@ -104,7 +138,7 @@ index 903f4a88a1..efb1821bab 100644
  }
  
  export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
-@@ -211,8 +196,7 @@ export function makeCloudCliOAuthConfig({
+@@ -204,8 +184,7 @@ export function makeCloudCliOAuthConfig({
  
  export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
  
@@ -117,16 +151,58 @@ index 903f4a88a1..efb1821bab 100644
 +// The explicit `boolean` keeps callers from treating the rest of a function as
 +// unreachable.
 +export const hasCloudPublicConfig: boolean = false;
+diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
+index 6fdad0ce..543d59bd 100644
+--- a/apps/server/src/relay/AgentAwarenessRelay.ts
++++ b/apps/server/src/relay/AgentAwarenessRelay.ts
+@@ -46,6 +46,7 @@ import {
+   RELAY_URL_SECRET,
+ } from "../cloud/config.ts";
+ import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
++import { hasCloudPublicConfig } from "../cloud/publicConfig.ts";
+ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+ import * as ProjectService from "../project/ProjectService.ts";
+@@ -383,6 +384,9 @@ export const make = Effect.gen(function* () {
+       );
+ 
+   const readRelayConfig = Effect.gen(function* () {
++    // Unplugged build: never publish to a T3 Connect relay, even when an old
++    // link's credentials are still in the secret store.
++    if (!hasCloudPublicConfig) return null;
+     const [url, issuer, environmentCredential] = yield* Effect.all([
+       readSecretString(RELAY_URL_SECRET),
+       readSecretString(RELAY_ISSUER_SECRET),
+@@ -393,9 +397,11 @@ export const make = Effect.gen(function* () {
+       : null;
+   });
+ 
+-  const readPublishAgentActivityEnabled = readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
+-    Effect.map(isAgentActivityPublishingEnabledValue),
+-  );
++  const readPublishAgentActivityEnabled = hasCloudPublicConfig
++    ? readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
++        Effect.map(isAgentActivityPublishingEnabledValue),
++      )
++    : Effect.succeed(false);
+ 
+   const makeRelayClient = (relayConfig: {
+     readonly url: string;
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 23981a932e..4ade537b67 100644
+index 48d70110..4931a411 100644
 --- a/apps/server/src/server.ts
 +++ b/apps/server/src/server.ts
-@@ -852,6 +852,8 @@ const layerMakeServer = Layer.unwrap(
+@@ -833,6 +833,13 @@ const layerMakeServer = Layer.unwrap(
      const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
        Effect.gen(function* () {
          const cloudLink = yield* CloudLink.CloudLink;
-+        // Unplugged build: never reconcile or start a T3 Connect tunnel.
-+        if (!hasCloudPublicConfig) return;
++        // Unplugged build: never reconcile or start a T3 Connect tunnel. The
++        // startup sequence still waits for this gate, so signal it before
++        // returning or command readiness (and every HTTP request) hangs.
++        if (!hasCloudPublicConfig) {
++          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
++          return;
++        }
          const releaseManagedTunnel = cloudLink.releaseManagedTunnelOnShutdown().pipe(
            Effect.timeout("10 seconds"),
            Effect.tap((released) =>

@@ -34,8 +34,10 @@ vX.Y.Z-unplugged.N
 ```
 
 `N` starts at 1. The desktop app, CLI archive, and Android APK all carry that
-version. The workflow polls upstream hourly and skips tags it already
-released.
+version. The workflow runs on an hourly schedule, but GitHub's scheduled
+workflows are best-effort and can be delayed or skipped; trigger the `Release`
+workflow manually with `upstream_tag` to build a tag immediately. It skips tags
+it already released.
 
 Artifacts:
 
@@ -63,7 +65,7 @@ fail; that failure is the signal that the patches need a refresh.
 To check the series against another upstream tag:
 
 ```
-./scripts/check-patches.sh v0.1.0
+./scripts/check-patches.sh v0.1.1
 ```
 
 Refreshing after an upstream change:

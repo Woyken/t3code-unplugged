@@ -1,11 +1,18 @@
 diff --git a/apps/web/src/cloud/publicConfig.ts b/apps/web/src/cloud/publicConfig.ts
-index 8c3b9073e3..4de2dbe16f 100644
+index 9f1238b8..6458792c 100644
 --- a/apps/web/src/cloud/publicConfig.ts
 +++ b/apps/web/src/cloud/publicConfig.ts
-@@ -59,19 +59,13 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
+@@ -62,53 +62,13 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
  }
  
  export function resolveRelayTracingConfig() {
+-  // The relay exporter is created during module initialization, so this must be synchronous.
+-  if (
+-    typeof window !== "undefined" &&
+-    window.desktopBridge?.getRelayTelemetryEnabled?.() === false
+-  ) {
+-    return null;
+-  }
 -  const { relayTracing } = resolveCloudPublicConfig();
 -  return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
 -    ? {
@@ -20,17 +27,44 @@ index 8c3b9073e3..4de2dbe16f 100644
  
  export function hasCloudPublicConfig(): boolean {
 -  const config = resolveCloudPublicConfig();
--  return Boolean(config.clerkPublishableKey && config.clerkJwtTemplate && config.relayUrl);
+-  if (!config.clerkPublishableKey || !config.clerkJwtTemplate || !config.relayUrl) {
+-    return false;
+-  }
+-
+-  // Electron has its own auth runtime; development keys also support private browser origins.
+-  if (
+-    typeof window === "undefined" ||
+-    window.desktopBridge !== undefined ||
+-    !config.clerkPublishableKey.startsWith("pk_live_")
+-  ) {
+-    return true;
+-  }
+-
+-  try {
+-    // Custom Frontend API hosts use clerk.<production domain>.
+-    const domain = clerkFrontendApiHostnameFromPublishableKey(config.clerkPublishableKey).replace(
+-      /^clerk\./u,
+-      "",
+-    );
+-    const { hostname, protocol, port } = window.location;
+-    return (
+-      protocol === "https:" &&
+-      port === "" &&
+-      (hostname === domain || hostname.endsWith(`.${domain}`))
+-    );
+-  } catch {
+-    return false;
+-  }
 +  // Unplugged build: T3 Connect is removed, so no cloud UI may mount.
 +  return false;
  }
  
  export function resolveRelayClerkTokenOptions() {
 diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
-index cf343e26a4..1b4fc7e968 100644
+index 6e550f68..0d799244 100644
 --- a/apps/web/vite.config.ts
 +++ b/apps/web/vite.config.ts
-@@ -35,13 +35,15 @@ const explicitHost = process.env.HOST?.trim();
+@@ -34,13 +34,15 @@ const explicitHost = process.env.HOST?.trim();
  const host = explicitHost || "localhost";
  const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
  const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
@@ -52,4 +86,4 @@ index cf343e26a4..1b4fc7e968 100644
 +const configuredRelayTracingToken = "";
  const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
  const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
- const configuredHostedAppUrl = (() => {
+ const configuredDesktopUpdateRepository =

@@ -1,16 +1,16 @@
 diff --git a/apps/web/src/components/settings/DiagnosticsSettings.tsx b/apps/web/src/components/settings/DiagnosticsSettings.tsx
-index 94e82775c9..3bff2aa531 100644
+index e2342ae5..afbad32f 100644
 --- a/apps/web/src/components/settings/DiagnosticsSettings.tsx
 +++ b/apps/web/src/components/settings/DiagnosticsSettings.tsx
 @@ -38,7 +38,6 @@ import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
- import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
  import { useAtomCommand } from "../../state/use-atom-command";
  import { useSettingsScope } from "./SettingsScopeContext";
 -import { TelemetryExportSettings } from "./TelemetryExportSettings";
  
  const NUMBER_FORMAT = new Intl.NumberFormat();
  
-@@ -813,19 +812,6 @@ export function DiagnosticsSettingsPanel() {
+@@ -812,19 +811,6 @@ export function DiagnosticsSettingsPanel() {
    const isInitialLoading = isPending && data === null;
    const isProcessInitialLoading = isProcessPending && processData === null;
    const isResourceInitialLoading = isResourcePending && resourceData === null;
@@ -27,10 +27,10 @@ index 94e82775c9..3bff2aa531 100644
 -  ) {
 -    setExportFormEnvironmentId(environmentId);
 -  }
-   const signalProcess = useCallback(
-     async (pid: number, signal: ServerProcessSignal) => {
-       const targetEnvironmentId = environmentIdRef.current;
-@@ -1351,7 +1337,6 @@ export function DiagnosticsSettingsPanel() {
+   const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
+     const targetEnvironmentId = environmentIdRef.current;
+     const process = processDataRef.current?.processes.find((entry) => entry.pid === pid);
+@@ -1343,7 +1329,6 @@ export function DiagnosticsSettingsPanel() {
            <EmptyRows label={isInitialLoading ? "Loading span names..." : "No spans found."} />
          )}
        </SettingsSection>
@@ -39,10 +39,10 @@ index 94e82775c9..3bff2aa531 100644
    );
  }
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index 5747fc59d9..e53a4ba4e6 100644
+index 38737b26..2cc9de39 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
-@@ -576,14 +576,6 @@ export const SETTINGS_SEARCH_ITEMS = [
+@@ -556,14 +556,6 @@ export const SETTINGS_SEARCH_ITEMS = [
      to: "/settings/general",
      searchTerms: ["telemetry analytics usage data tracking legal opt out"],
    },
@@ -58,22 +58,34 @@ index 5747fc59d9..e53a4ba4e6 100644
      id: "diagnostics",
      title: "Diagnostics",
 diff --git a/packages/shared/src/otelEnvironment.ts b/packages/shared/src/otelEnvironment.ts
-index 9e0f1ef2f3..7cb6bed2aa 100644
+index bcbebe3e..f529b076 100644
 --- a/packages/shared/src/otelEnvironment.ts
 +++ b/packages/shared/src/otelEnvironment.ts
-@@ -290,7 +290,7 @@ const endpointSignal = (name: OtlpSignalName, own: Settings, generic: Settings):
-   };
+@@ -265,7 +265,7 @@ const sdkFlags = {
+   ),
  };
  
 -export const load: Effect.Effect<OtelEnvironment> = Config.all({
 +export const loadFromEnvironment: Effect.Effect<OtelEnvironment> = Config.all({
-   t3: flag(
-     "T3CODE_OTEL_SDK_DISABLED",
-     T3CODE_TRUE,
-@@ -358,6 +358,19 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
+   ...sdkFlags,
+   resource: resourceAttributes,
+   generic: settings("OTEL_EXPORTER_OTLP_"),
+@@ -315,18 +315,22 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
    Effect.orDie,
  );
  
+-export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
+-  Config.all({
+-    ...sdkFlags,
+-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
+-  }).pipe(
+-    Effect.map(
+-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
+-    ),
+-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
+-    Effect.orDie,
+-    Effect.runSync,
+-  );
 +/**
 + * Unplugged build: OpenTelemetry export is removed, so every signal resolves to
 + * no endpoint. Local trace files and console logs are unaffected.
@@ -87,6 +99,9 @@ index 9e0f1ef2f3..7cb6bed2aa 100644
 +  logs: OtelSignal.Unset(),
 +});
 +
++export const isRelayTracingEnabled = (_env: Readonly<Record<string, string | undefined>>) =>
++  // Unplugged build: relay tracing is removed.
++  false;
+ 
  export type SignalName = "traces" | "metrics" | "logs";
  
- export interface SignalEndpoint {

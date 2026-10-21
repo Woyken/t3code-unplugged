@@ -16,8 +16,13 @@ grep -q "export const hasCloudPublicConfig: boolean = false;" \
   apps/server/src/cloud/publicConfig.ts ||
   fail "server cloud config is still configurable"
 
-grep -q "if (!hasCloudPublicConfig) return;" apps/server/src/server.ts ||
+grep -q "if (!hasCloudPublicConfig) {" apps/server/src/server.ts ||
   fail "server still reconciles cloud tunnels"
+grep -q "Deferred.succeed(cloudLinkParked, undefined)" apps/server/src/server.ts ||
+  fail "server startup gate is never signalled without cloud config"
+grep -q "if (!hasCloudPublicConfig) return null;" \
+  apps/server/src/relay/AgentAwarenessRelay.ts ||
+  fail "the relay client can still publish agent activity"
 
 ! grep -q "connectCommand" apps/server/src/binCli.ts ||
   fail "t3 connect is still registered"
@@ -32,6 +37,8 @@ grep -q 'Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(fals
 
 grep -q "disabled: true" packages/shared/src/otelEnvironment.ts ||
   fail "OpenTelemetry environment is still read"
+grep -q "isRelayTracingEnabled = (_env" packages/shared/src/otelEnvironment.ts ||
+  fail "relay tracing is still configurable"
 
 ! grep -q "TelemetryExportSettings" \
   apps/web/src/components/settings/DiagnosticsSettings.tsx ||
