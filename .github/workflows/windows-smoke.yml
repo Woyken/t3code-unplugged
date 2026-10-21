@@ -1,0 +1,89 @@
+name: Windows installer smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      installer_url:
+        description: "Installer URL to install and launch"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Download installer
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ inputs.installer_url }}" -OutFile "$env:TEMP\t3-installer.exe"
+          Get-FileHash "$env:TEMP\t3-installer.exe" -Algorithm SHA256 | Format-List
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "$env:TEMP\t3-installer.exe" -ArgumentList "/S" -Wait -PassThru
+          "installer exit=$($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "installer failed with exit code $($p.ExitCode)" }
+
+      - name: Launch and require backend readiness
+        shell: pwsh
+        run: |
+          # The installed executable defaults to port 3773. The readiness probe
+          # is the same request the desktop makes, so a 2xx here means the app
+          # window can load instead of hanging on backend startup.
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "T3 Code (Beta).exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $app) { throw "T3 Code executable was not installed" }
+          "app=$($app.FullName)"
+
+          $logDir = Join-Path $env:USERPROFILE ".t3\userdata\logs"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          $proc = Start-Process -FilePath $app.FullName -ArgumentList "--enable-logging", "--v=1" -PassThru
+          $deadline = (Get-Date).AddSeconds(180)
+          $ready = $false
+          $lastError = ""
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) { break }
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:3773/.well-known/t3/environment" -UseBasicParsing -TimeoutSec 5
+              if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+                $ready = $true
+                break
+              }
+            } catch {
+              $lastError = $_.Exception.Message
+            }
+            Start-Sleep -Seconds 3
+          }
+
+          "hasExited=$($proc.HasExited)"
+          if ($proc.HasExited) { "exitCode=$($proc.ExitCode)" }
+          "lastProbeError=$lastError"
+          "ready=$ready"
+
+          Get-Process | Where-Object { $_.ProcessName -like "*T3*" } |
+            Select-Object ProcessName, Id, MainWindowTitle | Format-Table -AutoSize
+
+          Get-ChildItem $logDir | Select-Object Name, Length | Format-Table -AutoSize
+          if (Test-Path (Join-Path $logDir "desktop.trace.ndjson")) {
+            Get-Content (Join-Path $logDir "desktop.trace.ndjson") -Tail 20
+          }
+
+          New-Item -ItemType Directory -Force -Path "logs" | Out-Null
+          Copy-Item "$logDir\*" -Destination "logs" -Recurse -Force -ErrorAction SilentlyContinue
+
+          Get-Process | Where-Object { $_.ProcessName -like "*T3*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $ready) { throw "desktop backend never answered its readiness probe" }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-logs
+          path: logs
+          if-no-files-found: warn
