@@ -135,6 +135,11 @@ jobs:
         working-directory: upstream
         run: vp run --filter t3 build
 
+      - name: Pin patched dependencies for the CLI archive
+        working-directory: upstream
+        shell: bash
+        run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
+
       - name: Build CLI executable
         working-directory: upstream
         env:
@@ -265,6 +270,11 @@ jobs:
       - name: Align package versions
         working-directory: upstream
         run: node scripts/update-release-package-versions.ts "${{ needs.resolve.outputs.version }}"
+
+      - name: Pin patched dependencies for the desktop sidecar
+        working-directory: upstream
+        shell: bash
+        run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
 
       - name: Build Windows installer
         working-directory: upstream
