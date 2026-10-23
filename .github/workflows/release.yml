@@ -88,11 +88,19 @@ jobs:
           echo "Releasing ${upstream_tag} as v${version}."
 
   linux-cli:
-    name: Linux CLI
+    name: Linux CLI ${{ matrix.arch }}
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -133,7 +141,7 @@ jobs:
           # The SEA host must be Node 25.7+; keep in step with SEA_NODE_VERSION
           # in apps/server/vite.config.ts.
           VP_NODE_VERSION: "26.8.2"
-        run: node apps/server/scripts/cli.ts build-exe --target linux-x64
+        run: node apps/server/scripts/cli.ts build-exe --target linux-${{ matrix.arch }}
 
       - name: Build resource monitor
         working-directory: upstream
@@ -143,7 +151,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          stage="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          stage="$RUNNER_TEMP/cli-resource-monitor/linux-${{ matrix.arch }}"
           mkdir -p "$stage"
           cp upstream/native/resource-monitor/target/release/t3-resource-monitor "$stage/"
 
@@ -154,7 +162,7 @@ jobs:
           set -euo pipefail
           time timeout -k 30 600 node scripts/build-cli-archive.ts \
             --platform linux \
-            --arch x64 \
+            --arch ${{ matrix.arch }} \
             --version "${{ needs.resolve.outputs.version }}" \
             --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
             --output-dir release-cli
@@ -163,7 +171,7 @@ jobs:
       - name: Upload CLI archive
         uses: actions/upload-artifact@v4
         with:
-          name: cli-linux-x64
+          name: cli-linux-${{ matrix.arch }}
           path: upstream/release-cli/*
           if-no-files-found: error
 

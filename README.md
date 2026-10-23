@@ -41,7 +41,8 @@ it already released.
 
 Artifacts:
 
-- `t3-X.Y.Z-unplugged.N-linux-x64.tar.gz` – standalone Linux CLI/server
+- `t3-X.Y.Z-unplugged.N-linux-x64.tar.gz` – standalone Linux CLI/server (x64)
+- `t3-X.Y.Z-unplugged.N-linux-arm64.tar.gz` – standalone Linux CLI/server (arm64)
 - `T3-Code-X.Y.Z-unplugged.N-x64.exe` – Windows NSIS installer
 - `t3code-unplugged-X.Y.Z-unplugged.N-android.apk` – Android APK
 - `latest.yml` + `T3-Code-X.Y.Z-unplugged.N-x64.exe.blockmap` – Windows updater metadata
