@@ -49,8 +49,8 @@ Artifacts:
 - `SHA256SUMS`
 
 Windows builds are unsigned, so SmartScreen may warn; the Android APK is
-debug-signed. Windows installs check this repository's releases for updates.
-Mobile OTA updates are disabled, and Linux/Android installs update manually.
+debug-signed. Windows and Linux CLI installs check this repository's releases for
+updates. Mobile OTA updates are disabled, and the Android app updates manually.
 
 Release notes carry the upstream stable changelog, and the desktop update prompt
 shows those changes on the `latest` channel as well, not just on nightly builds.

@@ -1,0 +1,11 @@
+diff --git a/packages/shared/src/cliRelease.ts b/packages/shared/src/cliRelease.ts
+index 22476c6..1b72229 100644
+--- a/packages/shared/src/cliRelease.ts
++++ b/packages/shared/src/cliRelease.ts
+@@ -1,4 +1,5 @@
+-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
++// Unplugged build: update checks and downloads come from this fork's releases.
++const CLI_RELEASE_REPOSITORY = "Woyken/t3code-unplugged";
+ export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
+ export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
+ export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
