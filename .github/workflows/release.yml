@@ -402,29 +402,97 @@ jobs:
           test -f "$installer.blockmap"
           sha256sum * > SHA256SUMS
 
+      - name: Fetch upstream release notes
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          # The desktop updater reads the GitHub release body as the update
+          # changelog. Fetch the notes GitHub generated for the upstream tag so
+          # the update prompt lists the same changes as an official install.
+          # The workflow token is scoped to this repository, so stay anonymous.
+          api_url="https://api.github.com/repos/pingdotgg/t3code/releases/tags/${UPSTREAM_TAG}"
+          : > upstream-notes.md
+          for attempt in $(seq 1 6); do
+            if curl --fail --silent --show-error --location --max-time 30 \
+              -H "Accept: application/vnd.github+json" \
+              -H "User-Agent: t3code-unplugged-release" \
+              "$api_url" -o upstream-release.json; then
+              jq -r '.body // empty' upstream-release.json > upstream-notes.md
+              if [[ -s upstream-notes.md ]]; then
+                echo "Fetched release notes for ${UPSTREAM_TAG}."
+                exit 0
+              fi
+            fi
+            echo "::warning::Upstream release notes for ${UPSTREAM_TAG} are not available yet (attempt ${attempt}/6)."
+            sleep 10
+          done
+          : > upstream-notes.md
+          echo "::warning::Publishing without upstream release notes; see https://github.com/pingdotgg/t3code/releases/tag/${UPSTREAM_TAG}."
+
       - name: Write release notes
         shell: bash
         env:
           UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          cat > notes.md <<EOF
-          Built from [pingdotgg/t3code ${UPSTREAM_TAG}](https://github.com/pingdotgg/t3code/tree/${UPSTREAM_TAG})
-          plus the unplugged patch series.
+          set -euo pipefail
 
-          Removed from this build:
+          # GitHub caps release bodies at 125,000 characters and the largest
+          # upstream changelog already sits near that limit, so leave room for
+          # the footer and trim at a line boundary.
+          max_upstream_bytes=118000
+          if [[ -s upstream-notes.md ]]; then
+            if [[ "$(wc -c < upstream-notes.md)" -gt "${max_upstream_bytes}" ]]; then
+              # Generated notes list the oldest change first. Keep the newest
+              # lines that fit so the update popover still shows recent changes.
+              python3 - "${max_upstream_bytes}" <<'PY'
+          import sys
 
-          - T3 Connect accounts, environment links, managed tunnels, and the relay client
-          - Product analytics (PostHog)
-          - Relay tracing (Axiom)
-          - OpenTelemetry export to remote collectors
+          limit = int(sys.argv[1])
+          with open("upstream-notes.md", encoding="utf-8") as source:
+              lines = source.read().splitlines()
 
-          Kept: local/LAN/Tailscale access, pairing URLs, local logs and trace files,
-          and all provider and editor features.
+          kept = []
+          size = 0
+          for line in reversed(lines):
+              line_size = len(f"{line}\n".encode())
+              if size + line_size > limit:
+                  break
+              kept.append(line)
+              size += line_size
+          kept.reverse()
 
-          Windows builds are unsigned (SmartScreen may warn) and the Android APK
-          uses the debug keystore. Windows installs check this repository's
-          releases for updates; Linux and Android update manually.
+          header = (
+              "## What's Changed\n\n"
+              "_Older changes omitted for GitHub's release body limit; see the full changelog below._\n\n"
+          )
+          with open("notes.md", "w", encoding="utf-8") as target:
+              target.write(header + "\n".join(kept) + "\n")
+          PY
+            else
+              cp upstream-notes.md notes.md
+            fi
+          else
+            cat > notes.md <<EOF
+          ## Upstream changes
+
+          Upstream release notes were not available when this build was published.
+          EOF
+          fi
+
+          # "Full Changelog" makes the desktop release-notes parser stop before
+          # the unplugged footer, so the popover only lists real changes.
+          cat >> notes.md <<EOF
+
+          ## Full Changelog
+
+          [View the full ${UPSTREAM_TAG} changelog on GitHub](https://github.com/pingdotgg/t3code/releases/tag/${UPSTREAM_TAG}). The list above is trimmed to GitHub's release body limit when it is too long.
+
+          ## About this unplugged build
+
+          Built from [pingdotgg/t3code ${UPSTREAM_TAG}](https://github.com/pingdotgg/t3code/tree/${UPSTREAM_TAG}) plus the unplugged patch series. T3 Connect, product analytics, relay tracing, and OpenTelemetry export are removed; local/LAN/Tailscale access and all provider and editor features are kept. Windows builds are unsigned (SmartScreen may warn) and the Android APK uses the debug keystore. Windows installs check this repository's releases for updates; Linux and Android update manually.
           EOF
 
       - name: Create release

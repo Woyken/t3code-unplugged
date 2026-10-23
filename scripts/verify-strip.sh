@@ -53,6 +53,13 @@ grep -q "return false;" apps/mobile/src/features/cloud/publicConfig.ts ||
 grep -q "Unplugged build: no OTA checks" apps/mobile/app.config.ts ||
   fail "mobile OTA updates are still enabled"
 
+grep -q "showUpdateDetails && state !== null && state.releaseNotes.length > 0" \
+  apps/web/src/components/sidebar/SidebarUpdatePill.tsx ||
+  fail "desktop update release notes are still hidden on the latest channel"
+! grep -q 'channel !== "nightly"' \
+  apps/web/src/components/sidebar/SidebarUpdateReleaseNotes.tsx ||
+  fail "desktop update release notes are still hidden on the latest channel"
+
 ! grep -q "repoEnv.VITE_CLERK" apps/web/vite.config.ts ||
   fail "web build still injects cloud config"
 
