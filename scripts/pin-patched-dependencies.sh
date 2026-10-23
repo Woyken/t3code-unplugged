@@ -18,7 +18,7 @@ test -f "$workspace"
 version="$(sed -n 's/^  node-pty@\([^:]*\): patches\/.*/\1/p' "$workspace" | head -n 1)"
 test -n "$version"
 
-if grep -q '^  node-pty: ' "$workspace"; then
+if grep -Fqx "  node-pty: ${version}" "$workspace"; then
   exit 0
 fi
 
