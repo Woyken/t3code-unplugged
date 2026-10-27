@@ -1,17 +1,15 @@
 name: Patch drift
 
-# Detect upstream patch drift, ask an OpenCode agent to refresh the series, then
-# validate the result in a clean checkout and open a draft PR.
+# React to a failed release preflight, ask an OpenCode agent to refresh the
+# series, then validate the result in a clean checkout and open a draft PR.
+# The Release workflow already checks the series before every build; this
+# workflow only runs on failure, not on a separate timer.
 #
 # The agent runs with a read-only GitHub token. Only the publish job can push,
 # and it only accepts changes under patches/ and upstream-base.txt.
 on:
-  schedule:
-    # Offset from the hourly Release workflow; four checks a day is enough to
-    # catch a new upstream tag before it causes several hourly release failures.
-    - cron: "43 */6 * * *"
   workflow_run:
-    # Run immediately when the release preflight rejects a new upstream tag.
+    # React to a failed release preflight; successful releases do no patch work.
     workflows: ["Release"]
     types: [completed]
   workflow_dispatch:

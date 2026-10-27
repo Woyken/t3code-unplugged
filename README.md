@@ -88,14 +88,14 @@ Refreshing after an upstream change:
 
 ## Automated drift fixes
 
-`.github/workflows/patch-drift.yml` runs every six hours and on manual
-dispatch. It also runs when the release workflow fails, so a preflight
-rejection triggers the fixer immediately. It resolves the newest upstream
-stable tag, applies the series, and runs `verify-strip`. If the series fails,
-an OpenCode agent using `opencode/deepseek-v4.1-flash-free#high` tries to
-refresh the affected patches.
-The result is validated in a clean checkout and published as a **draft PR**;
-nothing is auto-merged and the agent never receives a GitHub write token.
+`.github/workflows/patch-drift.yml` reacts to a failed `Release` workflow. The
+release preflight already checks the series before every build, so the fixer
+does not run its own periodic timer. It resolves the newest upstream stable
+tag, applies the series, and runs `verify-strip`. If the series fails, an
+OpenCode agent using `opencode/deepseek-v4.1-flash-free#high` tries to refresh
+the affected patches. The result is validated in a clean checkout and published
+as a **draft PR**; nothing is auto-merged and the agent never receives a GitHub
+write token.
 
 The agent needs the environment secret `OPENCODE_API_KEY` in the repository
 environment `autoFixer`. The free OpenCode model is limited-time; it still
@@ -103,7 +103,7 @@ requires an OpenCode Console API key, but not a paid DeepSeek key.
 
 The release workflow also runs `apply-patches.sh` and `verify-strip.sh` in a
 `preflight` job before any platform build starts, so a patch that stopped
-taking effect cannot reach a release even if the canary has not run yet.
+taking effect cannot reach a release.
 
 Manual runs:
 
@@ -115,10 +115,9 @@ gh workflow run patch-drift.yml -f force=true
 
 `dry_run` runs the agent and clean validation but skips the PR. `force` reruns
 the agent when an open `patch-fix/<tag>` PR or a previous failed attempt exists.
-After a failed attempt, a hidden marker is recorded on the drift issue so the
-scheduled check does not retry the same tag indefinitely. The scheduled check
-does not need to run on every branch; the `autoFixer` environment is restricted
-to `main`.
+After a failed attempt, a hidden marker is recorded on the drift issue so
+subsequent release failures do not retry the same tag indefinitely. The fixer
+runs on `main`; the `autoFixer` environment is restricted to that branch.
 
 The fixer edits `patches/` directly to keep the series format unchanged. Review
 AI-generated patches before merging: `verify-strip` checks the unplugged
