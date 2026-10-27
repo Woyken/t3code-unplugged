@@ -87,9 +87,31 @@ jobs:
           echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${upstream_tag} as v${version}."
 
+  preflight:
+    name: Verify patch series
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        run: bash scripts/apply-patches.sh upstream
+
+      - name: Verify unplugged strip
+        run: bash scripts/verify-strip.sh upstream
+
   linux-cli:
     name: Linux CLI ${{ matrix.arch }}
-    needs: resolve
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.should_build == 'true'
     strategy:
       fail-fast: false
@@ -229,7 +251,7 @@ jobs:
 
   windows-desktop:
     name: Windows desktop
-    needs: [resolve, linux-cli]
+    needs: [resolve, preflight, linux-cli]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: windows-2025
     timeout-minutes: 120
@@ -320,7 +342,7 @@ jobs:
 
   android-apk:
     name: Android APK
-    needs: resolve
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 150

@@ -1,0 +1,539 @@
+name: Patch drift
+
+# Detect upstream patch drift, ask an OpenCode agent to refresh the series, then
+# validate the result in a clean checkout and open a draft PR.
+#
+# The agent runs with a read-only GitHub token. Only the publish job can push,
+# and it only accepts changes under patches/ and upstream-base.txt.
+on:
+  schedule:
+    # Offset from the hourly Release workflow; four checks a day is enough to
+    # catch a new upstream tag before it causes several hourly release failures.
+    - cron: "43 */6 * * *"
+  workflow_run:
+    # Run immediately when the release preflight rejects a new upstream tag.
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream stable tag to check (default: newest)"
+        required: false
+        type: string
+      dry_run:
+        description: "Run the fixer and validation, but do not open a PR"
+        required: false
+        default: false
+        type: boolean
+      force:
+        description: "Run the fixer even if an open PR or a previous failed attempt exists"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-drift
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect patch drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'failure'
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      base: ${{ steps.resolve.outputs.base }}
+      failed: ${{ steps.check.outputs.failed }}
+      failed_patch: ${{ steps.check.outputs.failed_patch }}
+      existing_pr: ${{ steps.existing.outputs.url }}
+      fix_attempted: ${{ steps.existing.outputs.attempted }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream tag
+        id: resolve
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${INPUT_TAG}" ]]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(git ls-remote --tags --refs https://github.com/pingdotgg/t3code.git 'v*' \
+              | awk '{print $2}' \
+              | sed 's#^refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1)"
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: '${tag}' is not a stable tag like v1.2.3" >&2
+            exit 1
+          fi
+
+          base="$(cat upstream-base.txt)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "Checking ${tag} against base ${base}."
+
+      - name: Check for an existing fix PR or failed attempt
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="patch-fix/${TAG}"
+          url="$(gh pr list --head "${branch}" --state open --json url --jq '.[0].url // empty' || true)"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${url}" ]]; then
+            echo "Open fix PR already exists: ${url}"
+          fi
+
+          issues_json="$(gh issue list --state open --label patch-drift --limit 100 \
+            --json number,title,body 2>/dev/null || echo '[]')"
+          attempted=false
+          if printf '%s' "${issues_json}" | jq -e \
+            --arg title "Patch drift: ${TAG}" \
+            --arg marker "<!-- ai-fix-attempted: ${TAG} -->" \
+            '[.[] | select(.title == $title and ((.body // "") | contains($marker)))] | length > 0' \
+            >/dev/null; then
+            attempted=true
+            echo "A previous AI fix for ${TAG} did not produce a PR."
+          fi
+          echo "attempted=${attempted}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ steps.resolve.outputs.tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply series and verify strip
+        id: check
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+
+          mkdir -p fix-input/rejects
+          failed=false
+          failed_patch=""
+          : > fix-input/apply.log
+
+          patches=(patches/*.patch)
+          if (( ${#patches[@]} == 0 )); then
+            echo "::error::No patches found in patches/."
+            exit 1
+          fi
+
+          for patch in "${patches[@]}"; do
+            name="$(basename "${patch}")"
+            patch_path="$(realpath "${patch}")"
+            echo "applying ${name}" | tee -a fix-input/apply.log
+            if ! git -C upstream apply --reject --whitespace=nowarn "${patch_path}" 2>&1 | tee -a fix-input/apply.log; then
+              failed=true
+              failed_patch="${name}"
+              break
+            fi
+          done
+
+          if [[ "${failed}" == "false" ]]; then
+            if ! bash scripts/verify-strip.sh upstream 2>&1 | tee -a fix-input/apply.log; then
+              failed=true
+              failed_patch="verify-strip"
+            fi
+          fi
+
+          if [[ "${failed}" == "true" ]]; then
+            while IFS= read -r rej; do
+              dest="fix-input/rejects/$(printf '%s' "${rej#upstream/}" | tr '/' '_')"
+              cp "${rej}" "${dest}"
+            done < <(find upstream -name '*.rej' -type f)
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "failed_patch=${failed_patch}" >> "$GITHUB_OUTPUT"
+            echo "::warning::Patch series does not apply to ${{ steps.resolve.outputs.tag }} (${failed_patch})."
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+            echo "failed_patch=" >> "$GITHUB_OUTPUT"
+            echo "Patch series applies to ${{ steps.resolve.outputs.tag }}."
+          fi
+
+      - name: Upload failure details
+        if: steps.check.outputs.failed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-fix-input
+          path: fix-input
+          if-no-files-found: ignore
+
+  fix:
+    name: Fix patch series
+    needs: detect
+    if: |
+      needs.detect.outputs.failed == 'true' &&
+      (needs.detect.outputs.existing_pr == '' ||
+       (github.event_name == 'workflow_dispatch' && inputs.force == true)) &&
+      (needs.detect.outputs.fix_attempted != 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.force == true))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    environment: autoFixer
+    env:
+      TAG: ${{ needs.detect.outputs.tag }}
+      BASE: ${{ needs.detect.outputs.base }}
+      # Bump deliberately; the workflow installs this exact OpenCode V2 version.
+      OPENCODE_VERSION: "2.2.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download failure details
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: patch-fix-input
+          path: fix-input
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.detect.outputs.tag }}
+          path: upstream
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch previous base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${BASE}" != "${TAG}" ]]; then
+            git -C upstream fetch --depth 1 origin "refs/tags/${BASE}:refs/tags/${BASE}"
+          fi
+          git -C upstream tag --list "${BASE}" "${TAG}"
+
+      - name: Render prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fix-input
+          sed -e "s/{{TAG}}/${TAG}/g" -e "s/{{BASE}}/${BASE}/g" \
+            .github/prompts/patch-fixer.md > fix-input/prompt.md
+
+      - name: Install OpenCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/v2/install | bash -s -- \
+            --version "${OPENCODE_VERSION}" --no-modify-path
+          "$HOME/.opencode/bin/opencode" --version
+
+      - name: Run patch fixer
+        shell: bash
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENCODE_API_KEY:-}" ]]; then
+            echo "::error::OPENCODE_API_KEY is not set. Add it as an Actions secret."
+            exit 1
+          fi
+          "$HOME/.opencode/bin/opencode" --standalone --print-logs run \
+            --agent patch-fixer \
+            --model "opencode/deepseek-v4.1-flash-free#high" \
+            --auto \
+            "$(cat fix-input/prompt.md)" 2>&1 | tee fix-input/opencode.log
+
+      - name: Redact secret from logs
+        if: always()
+        shell: bash
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENCODE_API_KEY:-}" ]]; then
+            exit 0
+          fi
+          if [[ -f fix-input/opencode.log ]] && grep -qF -- "${OPENCODE_API_KEY}" fix-input/opencode.log; then
+            echo "[redacted: the log contained the API key]" > fix-input/opencode.log
+            echo "::warning::Redacted the API key from the OpenCode log."
+          fi
+          if grep -rqF -- "${OPENCODE_API_KEY}" patches fix-input/prompt.md 2>/dev/null; then
+            echo "::error::The fixer wrote the API key into the patch series or prompt."
+            exit 1
+          fi
+
+      # Re-check the agent's edits before handing anything to the publish job.
+      # The publish job repeats validation from a clean checkout; this step just
+      # rejects obvious mistakes and builds the reviewable diff.
+      - name: Validate agent edits
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git add patches upstream-base.txt
+
+          unexpected="$(
+            { git diff --name-only; git diff --cached --name-only; git ls-files --others --exclude-standard; } \
+              | sort -u \
+              | grep -vE '^(patches/|upstream-base\.txt$)' \
+              | grep -vE '^(upstream$|upstream/|fix-input$|fix-input/)' \
+              || true
+          )"
+          if [[ -n "${unexpected}" ]]; then
+            echo "::error::The fixer changed paths outside patches/ and upstream-base.txt:"
+            echo "${unexpected}"
+            exit 1
+          fi
+
+          if [[ "$(cat upstream-base.txt)" != "${TAG}" ]]; then
+            echo "::error::upstream-base.txt was not updated to ${TAG}."
+            exit 1
+          fi
+
+          if [[ -z "$(git diff --cached --name-only)" ]]; then
+            echo "::error::The fixer made no changes."
+            exit 1
+          fi
+
+          git diff --cached --binary -- patches upstream-base.txt > fix-input/proposed.diff
+          git diff --cached --stat -- patches upstream-base.txt > fix-input/proposed-stat.txt
+          git diff --cached --name-only -- patches upstream-base.txt > fix-input/changed-files.txt
+          cat fix-input/changed-files.txt
+
+      - name: Upload proposed fix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-fix-proposal
+          path: fix-input
+          if-no-files-found: ignore
+
+  publish:
+    name: Validate and open draft PR
+    needs: [detect, fix]
+    if: |
+      needs.fix.result == 'success' &&
+      inputs.dry_run != true &&
+      (needs.detect.outputs.existing_pr == '' ||
+       (github.event_name == 'workflow_dispatch' && inputs.force == true))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr_url: ${{ steps.pr.outputs.url }}
+    env:
+      TAG: ${{ needs.detect.outputs.tag }}
+      BASE: ${{ needs.detect.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download proposed fix
+        uses: actions/download-artifact@v4
+        with:
+          name: patch-fix-proposal
+          path: ${{ runner.temp }}/patch-proposal
+
+      - name: Apply and validate diff
+        shell: bash
+        env:
+          PROPOSAL: ${{ runner.temp }}/patch-proposal
+        run: |
+          set -euo pipefail
+          test -s "${PROPOSAL}/proposed.diff"
+          git apply --check "${PROPOSAL}/proposed.diff"
+          git apply "${PROPOSAL}/proposed.diff"
+
+          changed="$(
+            { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u
+          )"
+          bad="$(printf '%s\n' "${changed}" | grep -vE '^(patches/|upstream-base\.txt$)' | grep -v '^$' || true)"
+          if [[ -n "${bad}" ]]; then
+            echo "::error::Proposed fix touches disallowed paths:"
+            echo "${bad}"
+            exit 1
+          fi
+
+          if [[ "$(cat upstream-base.txt)" != "${TAG}" ]]; then
+            echo "::error::upstream-base.txt is not ${TAG}."
+            exit 1
+          fi
+
+          ./scripts/check-patches.sh "${TAG}"
+
+      - name: Commit and push branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="patch-fix/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git add patches upstream-base.txt
+          git commit -m "Refresh unplugged patches for ${TAG}"
+          git push --force origin "HEAD:refs/heads/${branch}"
+
+      - name: Create or update PR
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          PROPOSAL: ${{ runner.temp }}/patch-proposal
+        run: |
+          set -euo pipefail
+          branch="patch-fix/${TAG}"
+          url="$(gh pr list --head "${branch}" --state open --json url --jq '.[0].url // empty')"
+          if [[ -n "${url}" ]]; then
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "Updated existing PR: ${url}"
+            exit 0
+          fi
+
+          cat > "${PROPOSAL}/pr-body.md" <<EOF
+          ## Automated upstream patch refresh
+
+          Upstream tag: \`${TAG}\`
+          Previous base: \`${BASE}\`
+          Model: \`opencode/deepseek-v4.1-flash-free#high\`
+          Trigger: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          ### Validation
+
+          - \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout.
+          - The proposed diff only touches \`patches/\` and \`upstream-base.txt\`.
+
+          ### Diff stat
+
+          \`\`\`
+          $(cat "${PROPOSAL}/proposed-stat.txt")
+          \`\`\`
+
+          ### Review
+
+          This PR was generated by an AI agent. These patches run in the release build, so review the diff for semantic or security changes before merging. \`verify-strip\` checks the unplugged guarantees; it does not prove that a patch is benign.
+          EOF
+
+          url="$(gh pr create \
+            --draft \
+            --base "${BASE_BRANCH:-main}" \
+            --head "${branch}" \
+            --title "Refresh unplugged patches for ${TAG}" \
+            --body-file "${PROPOSAL}/pr-body.md")"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "Opened draft PR: ${url}"
+
+  report:
+    name: Report drift
+    needs: [detect, fix, publish]
+    if: always() && needs.detect.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.detect.outputs.tag }}
+      BASE: ${{ needs.detect.outputs.base }}
+      DETECT_RESULT: ${{ needs.detect.result }}
+      FAILED: ${{ needs.detect.outputs.failed }}
+      FAILED_PATCH: ${{ needs.detect.outputs.failed_patch }}
+      EXISTING_PR: ${{ needs.detect.outputs.existing_pr }}
+      FIX_ATTEMPTED: ${{ needs.detect.outputs.fix_attempted }}
+      FIX_RESULT: ${{ needs.fix.result }}
+      PUBLISH_RESULT: ${{ needs.publish.result }}
+      PR_URL: ${{ needs.publish.outputs.pr_url }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Update drift issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create patch-drift \
+            --color FBCA04 \
+            --description "Patch series no longer applies to upstream" 2>/dev/null || true
+
+          issues_json="$(gh issue list --state open --label patch-drift --limit 100 \
+            --json number,title 2>/dev/null || echo '[]')"
+          issue_number="$(printf '%s' "${issues_json}" \
+            | jq --arg title "Patch drift: ${TAG}" \
+                '[.[] | select(.title == $title) | .number][0] // empty')"
+
+          if [[ "${DETECT_RESULT}" != "success" ]]; then
+            echo "The drift check did not complete; not closing any drift issue."
+            exit 0
+          fi
+
+          if [[ "${FAILED}" != "true" ]]; then
+            if [[ -n "${issue_number}" ]]; then
+              gh issue close "${issue_number}" \
+                --comment "The patch series applies to \`${TAG}\` again."
+            fi
+            exit 0
+          fi
+
+          if [[ -n "${PR_URL}" ]]; then
+            status="Draft PR opened: ${PR_URL}"
+          elif [[ "${DRY_RUN}" == "true" && "${FIX_RESULT}" == "success" ]]; then
+            status="Fix validated in dry-run mode; no PR was opened."
+          elif [[ -n "${EXISTING_PR}" ]]; then
+            status="An open fix PR already exists: ${EXISTING_PR}"
+          elif [[ "${FIX_ATTEMPTED}" == "true" && "${FIX_RESULT}" == "skipped" ]]; then
+            status="A previous AI attempt did not produce a PR; rerun with force or fix manually."
+          elif [[ "${FIX_RESULT}" == "failure" ]]; then
+            status="The AI fixer failed; see the workflow run logs."
+          elif [[ "${PUBLISH_RESULT}" == "failure" ]]; then
+            status="The proposed fix failed clean validation; no PR was opened."
+          else
+            status="Patch drift detected; no fix was produced."
+          fi
+
+          marker=""
+          if [[ -n "${PR_URL}" ]]; then
+            marker=""
+          elif [[ "${FIX_RESULT}" == "failure" || "${PUBLISH_RESULT}" == "failure" || "${FIX_ATTEMPTED}" == "true" ]]; then
+            marker="<!-- ai-fix-attempted: ${TAG} -->"
+          fi
+
+          cat > "${RUNNER_TEMP}/patch-drift.md" <<EOF
+          Upstream tag \`${TAG}\` no longer applies cleanly to the unplugged series.
+
+          - Previous base: \`${BASE}\`
+          - Failed patch: \`${FAILED_PATCH:-unknown}\`
+          - Status: ${status}
+          - Workflow run: ${RUN_URL}
+
+          The hourly release will keep failing until this is fixed or the patch series is refreshed.
+
+          ${marker}
+          EOF
+
+          if [[ -n "${issue_number}" ]]; then
+            gh issue edit "${issue_number}" --body-file "${RUNNER_TEMP}/patch-drift.md"
+            echo "Updated issue #${issue_number}"
+          else
+            gh issue create \
+              --title "Patch drift: ${TAG}" \
+              --label patch-drift \
+              --body-file "${RUNNER_TEMP}/patch-drift.md"
+          fi
