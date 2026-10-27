@@ -87,9 +87,31 @@ jobs:
           echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${upstream_tag} as v${version}."
 
+  preflight:
+    name: Verify patch series
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        run: bash scripts/apply-patches.sh upstream
+
+      - name: Verify unplugged strip
+        run: bash scripts/verify-strip.sh upstream
+
   linux-cli:
     name: Linux CLI ${{ matrix.arch }}
-    needs: resolve
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.should_build == 'true'
     strategy:
       fail-fast: false
@@ -229,7 +251,7 @@ jobs:
 
   windows-desktop:
     name: Windows desktop
-    needs: [resolve, linux-cli]
+    needs: [resolve, preflight, linux-cli]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: windows-2025
     timeout-minutes: 120
@@ -320,7 +342,7 @@ jobs:
 
   android-apk:
     name: Android APK
-    needs: resolve
+    needs: [resolve, preflight]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
@@ -521,3 +543,33 @@ jobs:
           body_path: notes.md
           files: artifacts/*
           make_latest: true
+
+  close-drift-issue:
+    name: Close resolved drift issue
+    needs: [resolve, release]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+    steps:
+      - name: Close matching drift issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create patch-drift \
+            --color FBCA04 \
+            --description "Patch series no longer applies to upstream" 2>/dev/null || true
+          issue_number="$(gh issue list --state open --label patch-drift --limit 100 \
+            --json number,title \
+            | jq --arg title "Patch drift: ${UPSTREAM_TAG}" \
+                '[.[] | select(.title == $title) | .number][0] // empty')"
+          if [[ -n "${issue_number}" ]]; then
+            gh issue close "${issue_number}" \
+              --comment "Release ${RELEASE_TAG} was published successfully for \`${UPSTREAM_TAG}\`."
+          fi

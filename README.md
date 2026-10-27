@@ -86,6 +86,45 @@ Refreshing after an upstream change:
 4. Update `upstream-base.txt`, run `./scripts/check-patches.sh <new-tag>`, and
    commit both the patch changes and the new base tag.
 
+## Automated drift fixes
+
+`.github/workflows/patch-drift.yml` reacts to a failed `Release` workflow. The
+release preflight already checks the series before every build, so the fixer
+does not run its own periodic timer. It resolves the newest upstream stable
+tag, applies the series, and runs `verify-strip`. If the series fails, an
+OpenCode agent using `opencode/deepseek-v4.1-flash-free#high` tries to refresh
+the affected patches. The result is validated in a clean checkout and published
+as a **draft PR**; nothing is auto-merged and the agent never receives a GitHub
+write token.
+
+The agent needs the environment secret `OPENCODE_API_KEY` in the repository
+environment `autoFixer`. The free OpenCode model is limited-time; it still
+requires an OpenCode Console API key, but not a paid DeepSeek key.
+
+The release workflow also runs `apply-patches.sh` and `verify-strip.sh` in a
+`preflight` job before any platform build starts, so a patch that stopped
+taking effect cannot reach a release.
+
+Manual runs:
+
+```
+gh workflow run patch-drift.yml
+gh workflow run patch-drift.yml -f upstream_tag=v0.1.3 -f dry_run=true
+gh workflow run patch-drift.yml -f force=true
+```
+
+`dry_run` runs the agent and agent-side checks but skips clean-checkout
+validation and the PR. `force` reruns the agent when an open `patch-fix/<tag>`
+PR or a previous failed attempt exists. After a failed attempt, a hidden marker
+is recorded on the drift issue so subsequent release failures do not retry the
+same tag indefinitely. When a release succeeds, the matching open drift issues
+are closed automatically. The fixer runs on `main`; the `autoFixer` environment
+is restricted to that branch.
+
+The fixer edits `patches/` directly to keep the series format unchanged. Review
+AI-generated patches before merging: `verify-strip` checks the unplugged
+guarantees, but it cannot prove that a patch is semantically correct or benign.
+
 ## Tests
 
 Upstream tests that assert cloud configuration is honored or that analytics is
