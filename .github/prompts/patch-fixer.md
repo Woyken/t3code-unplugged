@@ -56,6 +56,7 @@ Rules:
   you add a patch, use the next numeric prefix.
 - If you cannot fix the series, restore `patches/` and `upstream-base.txt` to
   their original state and explain what blocks you. Do not leave partial edits.
+  Use `git checkout -- patches/` and `git checkout -- upstream-base.txt`.
 
 Final answer: summarize each patch you changed, the commands you ran and their
 results, and any remaining risk or uncertainty.

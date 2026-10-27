@@ -51,7 +51,7 @@ permissions:
     resource: "git rm patches/*.patch"
     effect: allow
   - action: shell
-    resource: "git checkout -- patches*"
+    resource: "git checkout -- patches/"
     effect: allow
   - action: shell
     resource: "git checkout -- upstream-base.txt"
