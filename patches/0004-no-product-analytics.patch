@@ -19,9 +19,11 @@ index 82226c44..b55290bb 100644
    flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
    maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
      Config.withDefault(1_000),
-@@ -345,4 +345,4 @@ export const make = Effect.gen(function* () {
+@@ -335,6 +331,4 @@ export const make = Effect.gen(function* () {
    return AnalyticsService.of({ record, flush, recordOwners });
  });
  
 -export const layer = Layer.effect(AnalyticsService, make);
+-
+-const layerTest = AnalyticsService.layerTest;
 +export const layer = AnalyticsService.layerTest;
