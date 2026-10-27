@@ -1,5 +1,5 @@
 diff --git a/apps/web/src/components/settings/DiagnosticsSettings.tsx b/apps/web/src/components/settings/DiagnosticsSettings.tsx
-index e2342ae5..afbad32f 100644
+index 613074b2..39f5a3df 100644
 --- a/apps/web/src/components/settings/DiagnosticsSettings.tsx
 +++ b/apps/web/src/components/settings/DiagnosticsSettings.tsx
 @@ -38,7 +38,6 @@ import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
@@ -10,12 +10,11 @@ index e2342ae5..afbad32f 100644
  
  const NUMBER_FORMAT = new Intl.NumberFormat();
  
-@@ -812,19 +811,6 @@ export function DiagnosticsSettingsPanel() {
+@@ -807,18 +806,6 @@ function DiagnosticsSettingsBody() {
    const isInitialLoading = isPending && data === null;
    const isProcessInitialLoading = isProcessPending && processData === null;
    const isResourceInitialLoading = isResourcePending && resourceData === null;
--  // The export form waits for each environment's first tables so a search target below them
--  // stays in view. Later loads, such as a new resource window, must not remount it and drop drafts.
+-  // Wait for initial tables to stabilize search targets; later loads must preserve export drafts.
 -  const [exportFormEnvironmentId, setExportFormEnvironmentId] =
 -    useState<typeof environmentId>(null);
 -  if (
@@ -28,9 +27,9 @@ index e2342ae5..afbad32f 100644
 -    setExportFormEnvironmentId(environmentId);
 -  }
    const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
-     const targetEnvironmentId = environmentIdRef.current;
-     const process = processDataRef.current?.processes.find((entry) => entry.pid === pid);
-@@ -1343,7 +1329,6 @@ export function DiagnosticsSettingsPanel() {
+     const targetEnvironmentId = environmentId;
+     const process = processData?.processes.find((entry) => entry.pid === pid);
+@@ -1327,7 +1314,6 @@ function DiagnosticsSettingsBody() {
            <EmptyRows label={isInitialLoading ? "Loading span names..." : "No spans found."} />
          )}
        </SettingsSection>
@@ -39,11 +38,11 @@ index e2342ae5..afbad32f 100644
    );
  }
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index 38737b26..2cc9de39 100644
+index 1bd8f1bb..b51bfda4 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
-@@ -556,14 +556,6 @@ export const SETTINGS_SEARCH_ITEMS = [
-     to: "/settings/general",
+@@ -666,14 +666,6 @@ export const SETTINGS_SEARCH_ITEMS = [
+     to: "/settings/about",
      searchTerms: ["telemetry analytics usage data tracking legal opt out"],
    },
 -  {
@@ -58,10 +57,10 @@ index 38737b26..2cc9de39 100644
      id: "diagnostics",
      title: "Diagnostics",
 diff --git a/packages/shared/src/otelEnvironment.ts b/packages/shared/src/otelEnvironment.ts
-index bcbebe3e..f529b076 100644
+index 95392206..94a2e92a 100644
 --- a/packages/shared/src/otelEnvironment.ts
 +++ b/packages/shared/src/otelEnvironment.ts
-@@ -265,7 +265,7 @@ const sdkFlags = {
+@@ -268,7 +268,7 @@ const sdkFlags = {
    ),
  };
  
@@ -70,7 +69,7 @@ index bcbebe3e..f529b076 100644
    ...sdkFlags,
    resource: resourceAttributes,
    generic: settings("OTEL_EXPORTER_OTLP_"),
-@@ -315,18 +315,22 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
+@@ -318,18 +318,22 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
    Effect.orDie,
  );
  
