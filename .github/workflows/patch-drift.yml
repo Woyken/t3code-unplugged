@@ -211,13 +211,15 @@ jobs:
           name: patch-fix-input
           path: fix-input
 
-      - uses: actions/checkout@v4
-        with:
-          repository: pingdotgg/t3code
-          ref: ${{ needs.detect.outputs.tag }}
-          path: upstream
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Checkout upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Clone without the checkout action so it does not try to clean up
+          # submodules from upstream's broken .gitmodules, and so no GitHub
+          # credentials are persisted into the throwaway tree.
+          git clone --depth 1 --branch "${TAG}" \
+            https://github.com/pingdotgg/t3code.git upstream
 
       - name: Fetch previous base
         shell: bash
