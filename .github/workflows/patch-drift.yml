@@ -19,7 +19,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: "Run the fixer and validation, but do not open a PR"
+        description: "Run the fixer and agent-side checks, but skip clean validation and the PR"
         required: false
         default: false
         type: boolean
@@ -41,7 +41,10 @@ jobs:
     name: Detect patch drift
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'failure'
+    if: |
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
       pull-requests: read
@@ -450,6 +453,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.detect.outputs.tag }}
       BASE: ${{ needs.detect.outputs.base }}
       DETECT_RESULT: ${{ needs.detect.result }}

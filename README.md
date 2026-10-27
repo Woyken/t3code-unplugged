@@ -113,11 +113,13 @@ gh workflow run patch-drift.yml -f upstream_tag=v0.1.3 -f dry_run=true
 gh workflow run patch-drift.yml -f force=true
 ```
 
-`dry_run` runs the agent and clean validation but skips the PR. `force` reruns
-the agent when an open `patch-fix/<tag>` PR or a previous failed attempt exists.
-After a failed attempt, a hidden marker is recorded on the drift issue so
-subsequent release failures do not retry the same tag indefinitely. The fixer
-runs on `main`; the `autoFixer` environment is restricted to that branch.
+`dry_run` runs the agent and agent-side checks but skips clean-checkout
+validation and the PR. `force` reruns the agent when an open `patch-fix/<tag>`
+PR or a previous failed attempt exists. After a failed attempt, a hidden marker
+is recorded on the drift issue so subsequent release failures do not retry the
+same tag indefinitely. When a release succeeds, the matching open drift issues
+are closed automatically. The fixer runs on `main`; the `autoFixer` environment
+is restricted to that branch.
 
 The fixer edits `patches/` directly to keep the series format unchanged. Review
 AI-generated patches before merging: `verify-strip` checks the unplugged

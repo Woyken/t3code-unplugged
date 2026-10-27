@@ -543,3 +543,33 @@ jobs:
           body_path: notes.md
           files: artifacts/*
           make_latest: true
+
+  close-drift-issue:
+    name: Close resolved drift issue
+    needs: [resolve, release]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+    steps:
+      - name: Close matching drift issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create patch-drift \
+            --color FBCA04 \
+            --description "Patch series no longer applies to upstream" 2>/dev/null || true
+          issue_number="$(gh issue list --state open --label patch-drift --limit 100 \
+            --json number,title \
+            | jq --arg title "Patch drift: ${UPSTREAM_TAG}" \
+                '[.[] | select(.title == $title) | .number][0] // empty')"
+          if [[ -n "${issue_number}" ]]; then
+            gh issue close "${issue_number}" \
+              --comment "Release ${RELEASE_TAG} was published successfully for \`${UPSTREAM_TAG}\`."
+          fi

@@ -39,8 +39,55 @@ permissions:
     resource: "upstream/**"
     effect: allow
 
+  # Explicit allowlist: global git options before the subcommand must not turn
+  # into a bypass for the denies below.
   - action: shell
-    resource: "git *"
+    resource: "git apply --stat *"
+    effect: allow
+  - action: shell
+    resource: "git apply --check *"
+    effect: allow
+  - action: shell
+    resource: "git rm patches/*.patch"
+    effect: allow
+  - action: shell
+    resource: "git checkout -- patches*"
+    effect: allow
+  - action: shell
+    resource: "git checkout -- upstream-base.txt"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream status *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream diff *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream show *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream log *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream rev-parse *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream ls-files *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream apply *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream checkout *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream restore *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream reset *"
+    effect: allow
+  - action: shell
+    resource: "git -C upstream clean *"
     effect: allow
   - action: shell
     resource: "bash scripts/apply-patches.sh upstream"
