@@ -168,6 +168,15 @@ permissions:
     resource: "*--no-index*"
     effect: deny
   - action: shell
+    resource: "*--output*"
+    effect: deny
+  - action: shell
+    resource: "*--directory*"
+    effect: deny
+  - action: shell
+    resource: "*--unsafe-paths*"
+    effect: deny
+  - action: shell
     resource: "*/proc/*"
     effect: deny
   - action: shell
