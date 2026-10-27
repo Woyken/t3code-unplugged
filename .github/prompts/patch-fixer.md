@@ -31,7 +31,7 @@ Suggested method:
 5. Reproduce the failure with the normal script:
    `bash scripts/apply-patches.sh upstream`
    For the failing patch, inspect the rejected hunks with:
-   `git -C upstream apply --reject --whitespace=nowarn "$PWD/patches/<name>.patch"`
+   `bash scripts/apply-patch.sh <name>.patch`
    and read the generated `.rej` files in `upstream/`.
 6. Update the failing `patches/<name>.patch` directly. Adjust context, hunk
    line counts, and identifiers to match the new upstream source. Keep the

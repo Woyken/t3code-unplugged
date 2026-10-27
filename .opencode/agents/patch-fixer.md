@@ -75,9 +75,6 @@ permissions:
     resource: "git -C upstream ls-files *"
     effect: allow
   - action: shell
-    resource: "git -C upstream apply *"
-    effect: allow
-  - action: shell
     resource: "git -C upstream checkout *"
     effect: allow
   - action: shell
@@ -91,6 +88,11 @@ permissions:
     effect: allow
   - action: shell
     resource: "bash scripts/apply-patches.sh upstream"
+    effect: allow
+  # Only the fixed wrapper may apply an individual patch; it rejects option-like
+  # names and always uses the safe git apply flags.
+  - action: shell
+    resource: "bash scripts/apply-patch.sh *"
     effect: allow
   - action: shell
     resource: "bash scripts/verify-strip.sh upstream"
