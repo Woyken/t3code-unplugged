@@ -162,13 +162,13 @@ jobs:
         shell: bash
         run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
 
+      # Build natively on the matching runner. Upstream's cross-target list
+      # excludes linux-arm64 (its SEA output must load on 16/64 KiB page
+      # kernels), and a native build works for both architectures. Let setup-vp
+      # pick the package.json Node version; overriding it breaks the native check.
       - name: Build CLI executable
         working-directory: upstream
-        env:
-          # The SEA host must be Node 25.7+; keep in step with SEA_NODE_VERSION
-          # in apps/server/vite.config.ts.
-          VP_NODE_VERSION: "26.8.2"
-        run: node apps/server/scripts/cli.ts build-exe --target linux-${{ matrix.arch }}
+        run: node apps/server/scripts/cli.ts build-exe
 
       - name: Build resource monitor
         working-directory: upstream
