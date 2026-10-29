@@ -112,6 +112,12 @@ repairs two kinds of drift in the same flow:
   job logs and may update `.github/workflows/release.yml`, `scripts/`, and
   `README.md`, but not the patch series or other workflows.
 
+The Linux CLI job smoke-tests the packaged archive (`t3 --version` and a real
+`t3 serve` request) and blocks the release when the binary does not answer. That
+failure classifies as build drift and goes to the release fixer; the fixer may
+match the smoke invocation to new upstream flags but is not allowed to skip or
+loosen the check.
+
 Both agents use `opencode/deepseek-v4.1-flash-free#high`. They need the
 environment secret `OPENCODE_API_KEY` in the repository environment `autoFixer`.
 The free OpenCode model is limited-time; it still requires an OpenCode Console

@@ -19,6 +19,15 @@ Context:
 Goal: make the release build work with `{{TAG}}` while preserving what the
 release produces and how it is validated.
 
+A failure in `Smoke-test CLI archive` means the packaged binary started from the
+archive did not report the expected version or never answered HTTP requests on
+its loopback port. In that case check whether upstream changed the `t3 serve`
+flags, the archive layout, or the first-run behavior in
+`apps/server/scripts/cli.ts` and `scripts/build-cli-archive.ts`, and update the
+smoke invocation in `release.yml` to match. Never remove, skip, loosen, or
+`continue-on-error` the smoke test; if the artifact is genuinely broken by
+upstream code, explain that instead of weakening the check.
+
 Suggested method:
 
 1. Read `README.md`, `.github/workflows/release.yml`, the scripts used by the
