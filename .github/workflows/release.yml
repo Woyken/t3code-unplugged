@@ -92,7 +92,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -108,6 +108,17 @@ jobs:
 
       - name: Verify unplugged strip
         run: bash scripts/verify-strip.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: false
+          run-install: false
+
+      # Catching this before any platform build keeps a patch that references a
+      # symbol upstream removed from ever producing an artifact.
+      - name: Typecheck patched packages
+        run: bash scripts/typecheck-patches.sh upstream
 
   linux-cli:
     name: Linux CLI ${{ matrix.arch }}

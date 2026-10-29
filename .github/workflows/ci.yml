@@ -12,9 +12,17 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply patches to the recorded base tag
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: false
+          run-install: false
+
+      - name: Apply patches to the recorded base tag and typecheck
+        env:
+          # The step installs the server dependency graph and runs tsc.
+          T3CODE_PATCH_TYPECHECK: "1"
         run: ./scripts/check-patches.sh "$(cat upstream-base.txt)"

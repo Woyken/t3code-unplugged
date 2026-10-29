@@ -12,4 +12,10 @@ git clone --quiet --depth 1 --branch "$tag" \
 "$repo_root/scripts/apply-patches.sh" "$workdir/upstream"
 "$repo_root/scripts/verify-strip.sh" "$workdir/upstream"
 
-echo "check: $tag applies cleanly and is stripped"
+# Typechecking needs a dependency install, so it is opt-in for local runs.
+if [[ "${T3CODE_PATCH_TYPECHECK:-0}" == "1" ]]; then
+  "$repo_root/scripts/typecheck-patches.sh" "$workdir/upstream"
+  echo "check: $tag applies cleanly, is stripped, and typechecks"
+else
+  echo "check: $tag applies cleanly and is stripped"
+fi

@@ -59,18 +59,28 @@ shows those changes on the `latest` channel as well, not just on nightly builds.
 
 `patches/` is a `git apply` series against a specific upstream tag. The base
 tag is recorded in `upstream-base.txt`. Applying the series to a newer tag can
-fail; that failure is the signal that the patches need a refresh.
+fail; a patch can also keep applying while referencing a symbol upstream
+renamed or removed. Either failure is the signal that the patches need a
+refresh.
 
 ```
 ./scripts/apply-patches.sh /path/to/upstream-checkout
 ./scripts/verify-strip.sh /path/to/upstream-checkout
+./scripts/typecheck-patches.sh /path/to/upstream-checkout
 ```
+
+`typecheck-patches.sh` installs the server dependency graph on first use and
+then runs `tsc` over `t3` and `@t3tools/shared`, which covers every TypeScript
+file the series rewrites.
 
 To check the series against another upstream tag:
 
 ```
 ./scripts/check-patches.sh v0.1.1
 ```
+
+`check-patches.sh` applies the series and runs `verify-strip`; set
+`T3CODE_PATCH_TYPECHECK=1` to typecheck too.
 
 Refreshing after an upstream change:
 
@@ -89,12 +99,13 @@ Refreshing after an upstream change:
 ## Automated drift fixes
 
 `.github/workflows/patch-drift.yml` reacts to a failed `Release` run. It runs
-only after a failure; the release preflight already applies the series and runs
-`verify-strip`, so it needs no timer. It repairs two kinds of drift in the same
-flow:
+only after a failure; the release preflight already applies the series, runs
+`verify-strip`, and typechecks the patched tree, so it needs no timer. It
+repairs two kinds of drift in the same flow:
 
-- **Patch drift**: the series no longer applies or `verify-strip` fails. The
-  `patch-fixer` agent refreshes `patches/` and `upstream-base.txt`.
+- **Patch drift**: the series no longer applies, `verify-strip` fails, or the
+  patched tree does not typecheck. The `patch-fixer` agent refreshes
+  `patches/` and `upstream-base.txt`.
 - **Build drift**: the series still applies, but a build or publish step no
   longer matches a new upstream tag. The `release-fixer` agent gets the failed
   job logs and may update `.github/workflows/release.yml`, `scripts/`, and
@@ -108,8 +119,10 @@ API key, but not a paid DeepSeek key.
 The result is validated in a clean checkout and published as a regular PR on
 `patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
 never receive a GitHub write token. The publish job runs
-`check-patches.sh`, and for build drift it also runs `bash -n` over the scripts
-and parses every workflow as YAML before opening the PR.
+`check-patches.sh` with `T3CODE_PATCH_TYPECHECK=1`, so a proposed patch fix is
+only offered if the series still applies, strips, and typechecks; for build
+drift it also runs `bash -n` over the scripts and parses every workflow as YAML
+before opening the PR.
 
 Manual runs:
 

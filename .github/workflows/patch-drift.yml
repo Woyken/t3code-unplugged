@@ -46,7 +46,7 @@ jobs:
   detect:
     name: Detect drift
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     if: |
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'failure' &&
@@ -192,7 +192,13 @@ jobs:
           path: upstream
           fetch-depth: 1
 
-      - name: Apply series and verify strip
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: false
+          run-install: false
+
+      - name: Apply series, verify strip, and typecheck
         id: check
         shell: bash
         run: |
@@ -228,6 +234,14 @@ jobs:
             fi
           fi
 
+          # The series can apply and still reference symbols upstream removed.
+          if [[ "${failed}" == "false" ]]; then
+            if ! bash scripts/typecheck-patches.sh upstream 2>&1 | tee -a fix-input/apply.log; then
+              failed=true
+              failed_patch="typecheck"
+            fi
+          fi
+
           if [[ "${failed}" == "true" ]]; then
             while IFS= read -r rej; do
               dest="fix-input/rejects/$(printf '%s' "${rej#upstream/}" | tr '/' '_')"
@@ -235,11 +249,11 @@ jobs:
             done < <(find upstream -name '*.rej' -type f)
             echo "failed=true" >> "$GITHUB_OUTPUT"
             echo "failed_patch=${failed_patch}" >> "$GITHUB_OUTPUT"
-            echo "::warning::Patch series does not apply to ${{ steps.run.outputs.tag }} (${failed_patch})."
+            echo "::warning::Patch series failed on ${{ steps.run.outputs.tag }} (${failed_patch})."
           else
             echo "failed=false" >> "$GITHUB_OUTPUT"
             echo "failed_patch=" >> "$GITHUB_OUTPUT"
-            echo "Patch series applies to ${{ steps.run.outputs.tag }}."
+            echo "Patch series applies, is stripped, and typechecks on ${{ steps.run.outputs.tag }}."
           fi
 
       - name: Classify drift
@@ -256,8 +270,8 @@ jobs:
           fi
           echo "mode=${mode}" >> "$GITHUB_OUTPUT"
           case "${mode}" in
-            patch) echo "Patch drift detected." ;;
-            build) echo "Build drift detected; patch series applies." ;;
+            patch) echo "Patch drift detected (a patch, verify-strip, or typecheck failed)." ;;
+            build) echo "Build drift detected; patch series applies and typechecks." ;;
             none) echo "No drift detected." ;;
           esac
 
@@ -520,7 +534,7 @@ jobs:
       (needs.detect.outputs.existing_pr == '' ||
        (github.event_name == 'workflow_dispatch' && inputs.force == true))
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
@@ -544,10 +558,18 @@ jobs:
           name: drift-fix-proposal
           path: ${{ runner.temp }}/drift-proposal
 
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: false
+          run-install: false
+
       - name: Apply and validate diff
         shell: bash
         env:
           PROPOSAL: ${{ runner.temp }}/drift-proposal
+          # check-patches.sh clones a throwaway tree, so this installs and
+          # typechecks there and discards it afterwards.
+          T3CODE_PATCH_TYPECHECK: "1"
         run: |
           set -euo pipefail
           test -s "${PROPOSAL}/proposed.diff"
@@ -625,13 +647,13 @@ jobs:
 
           if [[ "${MODE}" == "patch" ]]; then
             title="Refresh unplugged patches for ${TAG}"
-            validation="- \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout.
+            validation="- \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout (apply, \`verify-strip\`, and \`tsc\`).
           - The proposed diff only touches \`patches/\` and \`upstream-base.txt\`."
           else
             title="Repair release build for ${TAG}"
             validation="- \`bash -n\` passed for every script in \`scripts/\`.
           - Every workflow file parses as YAML.
-          - \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout.
+          - \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout (apply, \`verify-strip\`, and \`tsc\`).
           - The proposed diff only touches \`.github/workflows/release.yml\`, \`scripts/\`, and \`README.md\`."
           fi
 
@@ -764,7 +786,7 @@ jobs:
 
           if [[ "${MODE}" == "patch" ]]; then
             {
-              echo "Upstream tag \`${TAG}\` no longer applies cleanly to the unplugged series."
+              echo "Upstream tag \`${TAG}\` no longer applies, verifies, or typechecks against the unplugged series."
               echo
               echo "- Previous base: \`${BASE}\`"
               echo "- Failed patch: \`${FAILED_PATCH:-unknown}\`"
@@ -773,7 +795,7 @@ jobs:
             } > "${RUNNER_TEMP}/drift.md"
           else
             {
-              echo "Release run ${RELEASE_RUN_URL} failed for upstream \`${TAG}\` while the patch series applied cleanly."
+              echo "Release run ${RELEASE_RUN_URL} failed for upstream \`${TAG}\` while the patch series applied, verified, and typechecked."
               echo
               echo "- Failed jobs:"
               printf '%s\n' "${FAILED_JOBS}" | sed 's/^/  - /'
