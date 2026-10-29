@@ -88,42 +88,50 @@ Refreshing after an upstream change:
 
 ## Automated drift fixes
 
-`.github/workflows/patch-drift.yml` reacts to a failed `Release` workflow. The
-release preflight already checks the series before every build, so the fixer
-does not run its own periodic timer. It resolves the newest upstream stable
-tag, applies the series, and runs `verify-strip`. If the series fails, an
-OpenCode agent using `opencode/deepseek-v4.1-flash-free#high` tries to refresh
-the affected patches. The result is validated in a clean checkout and published
-as a **draft PR**; nothing is auto-merged and the agent never receives a GitHub
-write token.
+`.github/workflows/patch-drift.yml` reacts to a failed `Release` run. It runs
+only after a failure; the release preflight already applies the series and runs
+`verify-strip`, so it needs no timer. It repairs two kinds of drift in the same
+flow:
 
-The agent needs the environment secret `OPENCODE_API_KEY` in the repository
-environment `autoFixer`. The free OpenCode model is limited-time; it still
-requires an OpenCode Console API key, but not a paid DeepSeek key.
+- **Patch drift**: the series no longer applies or `verify-strip` fails. The
+  `patch-fixer` agent refreshes `patches/` and `upstream-base.txt`.
+- **Build drift**: the series still applies, but a build or publish step no
+  longer matches a new upstream tag. The `release-fixer` agent gets the failed
+  job logs and may update `.github/workflows/release.yml`, `scripts/`, and
+  `README.md`, but not the patch series or other workflows.
 
-The release workflow also runs `apply-patches.sh` and `verify-strip.sh` in a
-`preflight` job before any platform build starts, so a patch that stopped
-taking effect cannot reach a release.
+Both agents use `opencode/deepseek-v4.1-flash-free#high`. They need the
+environment secret `OPENCODE_API_KEY` in the repository environment `autoFixer`.
+The free OpenCode model is limited-time; it still requires an OpenCode Console
+API key, but not a paid DeepSeek key.
+
+The result is validated in a clean checkout and published as a regular PR on
+`patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
+never receive a GitHub write token. The publish job runs
+`check-patches.sh`, and for build drift it also runs `bash -n` over the scripts
+and parses every workflow as YAML before opening the PR.
 
 Manual runs:
 
 ```
 gh workflow run patch-drift.yml
 gh workflow run patch-drift.yml -f upstream_tag=v0.1.3 -f dry_run=true
+gh workflow run patch-drift.yml -f run_id=123456789 -f dry_run=true
 gh workflow run patch-drift.yml -f force=true
 ```
 
 `dry_run` runs the agent and agent-side checks but skips clean-checkout
-validation and the PR. `force` reruns the agent when an open `patch-fix/<tag>`
-PR or a previous failed attempt exists. After a failed attempt, a hidden marker
-is recorded on the drift issue so subsequent release failures do not retry the
-same tag indefinitely. When a release succeeds, the matching open drift issues
-are closed automatically. The fixer runs on `main`; the `autoFixer` environment
-is restricted to that branch.
+validation and the PR. `force` reruns the agent when an open fix PR or a
+previous failed attempt exists. After a failed attempt, a hidden marker is
+recorded on the `patch-drift` or `release-drift` issue so subsequent release
+failures do not retry the same tag indefinitely. When a release succeeds, the
+matching open issues are closed automatically. The fixers run on `main`; the
+`autoFixer` environment is restricted to that branch.
 
-The fixer edits `patches/` directly to keep the series format unchanged. Review
-AI-generated patches before merging: `verify-strip` checks the unplugged
-guarantees, but it cannot prove that a patch is semantically correct or benign.
+Review AI-generated PRs before merging. The patch fixer changes the patch
+series; the release fixer can change the release workflow and build scripts.
+`verify-strip` checks the unplugged guarantees, but it cannot prove that a patch
+or workflow change is semantically correct or benign.
 
 ## Tests
 
