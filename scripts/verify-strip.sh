@@ -27,9 +27,12 @@ grep -q "if (!hasCloudPublicConfig) return null;" \
 ! grep -q "connectCommand" apps/server/src/binCli.ts ||
   fail "t3 connect is still registered"
 
-grep -q "export const layer = AnalyticsService.layerTest;" \
+grep -q "export const layer = Layer.succeed(" \
   apps/server/src/telemetry/AnalyticsService.ts ||
   fail "product analytics is still live"
+! grep -q "AnalyticsService.layerTest" \
+  apps/server/src/telemetry/AnalyticsService.ts ||
+  fail "analytics layer references a static that upstream removed"
 
 grep -q 'Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false))' \
   apps/server/src/telemetry/AnalyticsService.ts ||

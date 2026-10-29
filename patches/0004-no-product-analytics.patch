@@ -19,9 +19,22 @@ index 582b0aca..7587f97d 100644
    flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
    maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
      Config.withDefault(1_000),
-@@ -345,4 +341,4 @@ export const make = Effect.gen(function* () {
+@@ -332,4 +332,17 @@ export const make = Effect.gen(function* () {
    return AnalyticsService.of({ record, flush, recordOwners });
  });
  
 -export const layer = Layer.effect(AnalyticsService, make);
-+export const layer = AnalyticsService.layerTest;
++// Unplugged build: product analytics is a no-op. Upstream removed the
++// service's test layer static, so build the no-op layer here.
++export const layer = Layer.succeed(
++  AnalyticsService,
++  AnalyticsService.of({
++    record: Effect.fn("AnalyticsService.record")(function () {
++      return Effect.void;
++    }),
++    flush: Effect.void,
++    recordOwners: Effect.fn("AnalyticsService.recordOwners")(function () {
++      return Effect.void;
++    }),
++  }),
++);
