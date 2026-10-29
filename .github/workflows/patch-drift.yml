@@ -387,6 +387,13 @@ jobs:
             bash scripts/apply-patches.sh upstream
           fi
 
+      # The patch fixer runs scripts/typecheck-patches.sh, which needs vp.
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: false
+          run-install: false
+
       - name: Render prompt
         id: prompt
         shell: bash
