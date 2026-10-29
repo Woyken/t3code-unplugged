@@ -16,8 +16,8 @@ if ! command -v vp >/dev/null 2>&1; then
   exit 1
 fi
 
-# The patches only rewrite the server, shared, web, and mobile sources. Keep the
-# install to the server's dependency graph; it pulls shared and the packages the
-# patched server code imports, without every platform's toolchain.
-vp install --filter=t3... --filter=@t3tools/shared...
+# The patches only rewrite the server, shared, web, and mobile sources. Install
+# the same workspace graph the CLI build uses; the server tsconfig also includes
+# `../../scripts/lib`, which needs the scripts workspace's dependencies.
+vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
 vp run --filter t3 --filter @t3tools/shared typecheck

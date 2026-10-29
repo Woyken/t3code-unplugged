@@ -70,8 +70,9 @@ refresh.
 ```
 
 `typecheck-patches.sh` installs the server dependency graph on first use and
-then runs `tsc` over `t3` and `@t3tools/shared`, which covers every TypeScript
-file the series rewrites.
+then runs `tsc` over `t3` and `@t3tools/shared`, which covers the server and
+shared TypeScript files the series rewrites. The small web and mobile edits are
+covered by their own build steps.
 
 To check the series against another upstream tag:
 
