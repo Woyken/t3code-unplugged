@@ -4,20 +4,6 @@ index b7b329de..8353d7d4 100644
 +++ b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
 @@ -55,3 +55,3 @@ export function shouldUseSidebarUpdateReleaseNotesPopover(
  ): boolean {
--  return showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0;
+-  return showUpdateDetails && (state?.releaseNotes.length ?? 0) > 0;
 +  return showUpdateDetails && state !== null && state.releaseNotes.length > 0;
  }
-@@ -539,3 +539,3 @@ function SidebarUpdateControl() {
-             align="center"
--            aria-label="Nightly update release notes"
-+            aria-label="Update release notes"
-             initialFocus={false}
-diff --git a/apps/web/src/components/sidebar/SidebarUpdateReleaseNotes.tsx b/apps/web/src/components/sidebar/SidebarUpdateReleaseNotes.tsx
-index b9f29741..bdd8dd4e 100644
---- a/apps/web/src/components/sidebar/SidebarUpdateReleaseNotes.tsx
-+++ b/apps/web/src/components/sidebar/SidebarUpdateReleaseNotes.tsx
-@@ -54,3 +54,3 @@ export function SidebarUpdateReleaseNotes({
- }) {
--  if (state.channel !== "nightly" || state.releaseNotes.length === 0) {
-+  if (state.releaseNotes.length === 0) {
-     return <>{tooltip}</>;

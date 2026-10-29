@@ -1,8 +1,8 @@
 diff --git a/packages/shared/src/cliRelease.ts b/packages/shared/src/cliRelease.ts
-index 22476c6..1b72229 100644
+index 66777cc0..1b72229 100644
 --- a/packages/shared/src/cliRelease.ts
 +++ b/packages/shared/src/cliRelease.ts
-@@ -1,4 +1,5 @@
+@@ -6,4 +6,5 @@
 -const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
 +// Unplugged build: update checks and downloads come from this fork's releases.
 +const CLI_RELEASE_REPOSITORY = "Woyken/t3code-unplugged";
