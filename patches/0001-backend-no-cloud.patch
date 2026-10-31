@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
-index b0a2ceff..a1e69233 100644
+index 7c136ae5..a8c9efc9 100644
 --- a/apps/server/src/binCli.ts
 +++ b/apps/server/src/binCli.ts
 @@ -3,7 +3,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -11,18 +11,20 @@ index b0a2ceff..a1e69233 100644
  import * as CliError from "effect/cli/CliError";
  
  import * as NetService from "@t3tools/shared/Net";
-@@ -12,10 +12,8 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
- import { authCommand } from "./cli/auth.ts";
- import { environmentCommand } from "./cli/environment.ts";
+@@ -14,7 +14,6 @@ import { environmentCommand } from "./cli/environment.ts";
  import { appCommand } from "./cli/app.ts";
  import { browserCommand } from "./cli/browser.ts";
--import { connectCommand } from "./cli/connect.ts";
  import { pairCommand } from "./cli/pair.ts";
 -import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
  import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
  import { sharedServerCommandFlags } from "./cli/config.ts";
  import { projectCommand } from "./cli/project.ts";
-@@ -32,31 +30,7 @@ import { triageCommand } from "./cli/triage.ts";
+@@ -30,35 +29,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+ import { themeCommand } from "./cli/theme.ts";
+ import { traceCommand } from "./cli/trace.ts";
+ import { triageCommand } from "./cli/triage.ts";
+-import { connectCommand, statusCommand, upCommand } from "./cli/up.ts";
++import { statusCommand, upCommand } from "./cli/up.ts";
  
  const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
  
@@ -53,9 +55,9 @@ index b0a2ceff..a1e69233 100644
 -export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 +export const makeCli = () =>
    Command.make("t3", { ...sharedServerCommandFlags }).pipe(
-     Command.withDescription("Run the T3 Code server."),
-     Command.withHandler(runDefaultServerCommand),
-@@ -88,7 +62,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
+     Command.withDescription(
+       "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
+@@ -96,7 +71,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
        traceCommand,
        doctorCommand,
        triageCommand,
@@ -64,7 +66,7 @@ index b0a2ceff..a1e69233 100644
    );
  
 diff --git a/apps/server/src/cloud/config.ts b/apps/server/src/cloud/config.ts
-index 90713806..a8d6ccbd 100644
+index 5dac9e2d..0e4de119 100644
 --- a/apps/server/src/cloud/config.ts
 +++ b/apps/server/src/cloud/config.ts
 @@ -7,6 +7,7 @@ import * as Option from "effect/Option";
@@ -153,10 +155,10 @@ index 15594f11..e3ac8f4b 100644
 +// unreachable.
 +export const hasCloudPublicConfig: boolean = false;
 diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
-index 6fdad0ce..543d59bd 100644
+index f3c7b893..bee12d48 100644
 --- a/apps/server/src/relay/AgentAwarenessRelay.ts
 +++ b/apps/server/src/relay/AgentAwarenessRelay.ts
-@@ -46,6 +46,7 @@ import {
+@@ -47,6 +47,7 @@ import {
    RELAY_URL_SECRET,
  } from "../cloud/config.ts";
  import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
@@ -164,7 +166,7 @@ index 6fdad0ce..543d59bd 100644
  import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
  import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
  import * as ProjectService from "../project/ProjectService.ts";
-@@ -383,6 +384,9 @@ export const make = Effect.gen(function* () {
+@@ -382,6 +383,9 @@ export const make = Effect.gen(function* () {
        );
  
    const readRelayConfig = Effect.gen(function* () {
@@ -174,7 +176,7 @@ index 6fdad0ce..543d59bd 100644
      const [url, issuer, environmentCredential] = yield* Effect.all([
        readSecretString(RELAY_URL_SECRET),
        readSecretString(RELAY_ISSUER_SECRET),
-@@ -393,9 +397,11 @@ export const make = Effect.gen(function* () {
+@@ -392,9 +396,11 @@ export const make = Effect.gen(function* () {
        : null;
    });
  
@@ -190,10 +192,10 @@ index 6fdad0ce..543d59bd 100644
    const makeRelayClient = (relayConfig: {
      readonly url: string;
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 48d70110..4931a411 100644
+index 452addfb..f5184f6e 100644
 --- a/apps/server/src/server.ts
 +++ b/apps/server/src/server.ts
-@@ -833,6 +833,13 @@ const layerMakeServer = Layer.unwrap(
+@@ -882,6 +882,13 @@ const layerMakeServer = Layer.unwrap(
      const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
        Effect.gen(function* () {
          const cloudLink = yield* CloudLink.CloudLink;
