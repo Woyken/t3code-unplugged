@@ -1,0 +1,89 @@
+diff --git a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
+index 79f6d5f9..4fea89ab 100644
+--- a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
++++ b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
+@@ -76,6 +76,19 @@ export class OpenCode2Client extends Context.Service<
+ const SILENT_STREAM_TIMEOUT = "45 seconds";
+ 
+ const decodeEvent = Schema.decodeUnknownResult(Schema.fromJsonString(OpenCodeEvent));
++// @opencode/protocol 2.0.28 predates `retryAfterMs`, so the typed event decode
++// drops it. Newer OpenCode servers report a quota reset there, and T3's
++// usage-limit recovery needs the absolute time to resume at.
++const decodeRetryAfterMs = Schema.decodeUnknownOption(
++  Schema.fromJsonString(
++    Schema.Struct({
++      type: Schema.Literal("session.execution.failed"),
++      data: Schema.Struct({
++        error: Schema.Struct({ retryAfterMs: Schema.optionalKey(Schema.Finite) }),
++      }),
++    }),
++  ),
++);
+ const decodeEnvelope = Schema.decodeUnknownOption(
+   Schema.fromJsonString(
+     Schema.Struct({
+@@ -128,9 +141,23 @@ const readEvents = HttpClient.get("/api/event", {
+       Stream.pipeThroughChannel(Sse.decode()),
+       Stream.filterMapEffect((frame) => {
+         const decoded = decodeEvent(frame.data);
+-        return Result.isSuccess(decoded)
+-          ? Effect.succeed(Result.succeed<OpenCode2StreamEvent>(decoded.success))
+-          : undecodable(frame.data);
++        if (Result.isFailure(decoded)) return undecodable(frame.data);
++        const event = decoded.success;
++        if (event.type !== "session.execution.failed") {
++          return Effect.succeed(Result.succeed<OpenCode2StreamEvent>(event));
++        }
++        const retryAfterMs =
++          Option.getOrUndefined(decodeRetryAfterMs(frame.data))?.data.error.retryAfterMs;
++        return Effect.succeed(
++          Result.succeed<OpenCode2StreamEvent>(
++            retryAfterMs === undefined
++              ? event
++              : ({
++                  ...event,
++                  data: { ...event.data, error: { ...event.data.error, retryAfterMs } },
++                } as OpenCode2StreamEvent),
++          ),
++        );
+       }),
+     ),
+   ),
+diff --git a/packages/provider-opencode/src/server/v2/adapter.ts b/packages/provider-opencode/src/server/v2/adapter.ts
+index 74695bf6..53c6c0ad 100644
+--- a/packages/provider-opencode/src/server/v2/adapter.ts
++++ b/packages/provider-opencode/src/server/v2/adapter.ts
+@@ -2127,16 +2127,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
+           return yield* endExecution(state, turn, { status: "interrupted" });
+         case "session.execution.failed": {
+           const { type, message, status, response } = event.data.error;
++          // @opencode/protocol 2.0.28 predates `retryAfterMs`, but newer OpenCode
++          // servers send it for quota errors. Read it without widening the
++          // pinned event type.
++          const retryAfterMs = (
++            event.data.error as typeof event.data.error & { readonly retryAfterMs?: number }
++          ).retryAfterMs;
+           // OpenCode types an empty balance as provider.quota too, but it answers
+           // that with HTTP 402 and it never resets. Usage windows and budgets are 429.
+           const usageLimit =
+-            (type === "provider.quota" && status !== 402) || type === "provider.rate-limit";
++            (type === "provider.quota" && status !== 402) ||
++            type === "provider.rate-limit" ||
++            type === "provider.free-limit";
+           return yield* endExecution(state, turn, {
+             status: "failed",
+             failure: makeProviderFailure({
+               message: readableProviderErrorMessage(message, status, response?.body),
+               code: type,
+               class: usageLimit ? "usage_limit" : "provider_error",
++              // The free tier reports its reset only as a delay, and T3's
++              // usage-limit recovery needs an absolute time to resume at.
++              resetAt:
++                usageLimit && typeof retryAfterMs === "number" && retryAfterMs > 0
++                  ? DateTime.formatIso(
++                      DateTime.add(yield* DateTime.now, { milliseconds: retryAfterMs }),
++                    )
++                  : null,
+             }),
+           });
+         }

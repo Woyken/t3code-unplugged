@@ -63,6 +63,12 @@ fail; a patch can also keep applying while referencing a symbol upstream
 renamed or removed. Either failure is the signal that the patches need a
 refresh.
 
+`0008-opencode-free-limit-recovery.patch` is a fix not yet upstream. It
+classifies OpenCode's `provider.free-limit` error as a usage limit and forwards
+the `retryAfterMs` delay newer OpenCode servers report, so the existing
+auto-resume setting can schedule the continuation at the real reset time.
+Remove the patch once the fix lands upstream.
+
 ```
 ./scripts/apply-patches.sh /path/to/upstream-checkout
 ./scripts/verify-strip.sh /path/to/upstream-checkout
