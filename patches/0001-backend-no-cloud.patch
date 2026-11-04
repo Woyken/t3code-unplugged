@@ -1,8 +1,8 @@
 diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
-index 7c136ae5..a8c9efc9 100644
+index 15a3a932..e8377b80 100644
 --- a/apps/server/src/binCli.ts
 +++ b/apps/server/src/binCli.ts
-@@ -3,7 +3,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+@@ -5,7 +5,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
  import * as NodeServices from "@effect/platform-node/NodeServices";
  import * as Effect from "effect/Effect";
  import * as Layer from "effect/Layer";
@@ -11,7 +11,7 @@ index 7c136ae5..a8c9efc9 100644
  import * as CliError from "effect/cli/CliError";
  
  import * as NetService from "@t3tools/shared/Net";
-@@ -14,7 +14,6 @@ import { environmentCommand } from "./cli/environment.ts";
+@@ -16,7 +16,6 @@ import { environmentCommand } from "./cli/environment.ts";
  import { appCommand } from "./cli/app.ts";
  import { browserCommand } from "./cli/browser.ts";
  import { pairCommand } from "./cli/pair.ts";
@@ -19,14 +19,14 @@ index 7c136ae5..a8c9efc9 100644
  import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
  import { sharedServerCommandFlags } from "./cli/config.ts";
  import { projectCommand } from "./cli/project.ts";
-@@ -30,35 +29,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+@@ -32,35 +31,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
  import { themeCommand } from "./cli/theme.ts";
  import { traceCommand } from "./cli/trace.ts";
  import { triageCommand } from "./cli/triage.ts";
 -import { connectCommand, statusCommand, upCommand } from "./cli/up.ts";
 +import { statusCommand, upCommand } from "./cli/up.ts";
  
- const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
+ const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer);
  
 -const connectPublicConfigMissingMessage =
 -  "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
@@ -57,9 +57,9 @@ index 7c136ae5..a8c9efc9 100644
    Command.make("t3", { ...sharedServerCommandFlags }).pipe(
      Command.withDescription(
        "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
-@@ -96,7 +71,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
-       traceCommand,
+@@ -99,7 +74,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
        doctorCommand,
+       policyCommand,
        triageCommand,
 -      cloudEnabled ? connectCommand : connectUnavailableCommand,
      ]),
@@ -155,7 +155,7 @@ index 15594f11..e3ac8f4b 100644
 +// unreachable.
 +export const hasCloudPublicConfig: boolean = false;
 diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
-index f3c7b893..bee12d48 100644
+index 6a235911..82aaf941 100644
 --- a/apps/server/src/relay/AgentAwarenessRelay.ts
 +++ b/apps/server/src/relay/AgentAwarenessRelay.ts
 @@ -47,6 +47,7 @@ import {
@@ -166,7 +166,7 @@ index f3c7b893..bee12d48 100644
  import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
  import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
  import * as ProjectService from "../project/ProjectService.ts";
-@@ -382,6 +383,9 @@ export const make = Effect.gen(function* () {
+@@ -394,6 +395,9 @@ export const make = Effect.gen(function* () {
        );
  
    const readRelayConfig = Effect.gen(function* () {
@@ -176,7 +176,7 @@ index f3c7b893..bee12d48 100644
      const [url, issuer, environmentCredential] = yield* Effect.all([
        readSecretString(RELAY_URL_SECRET),
        readSecretString(RELAY_ISSUER_SECRET),
-@@ -392,9 +396,11 @@ export const make = Effect.gen(function* () {
+@@ -404,9 +408,11 @@ export const make = Effect.gen(function* () {
        : null;
    });
  
@@ -192,10 +192,10 @@ index f3c7b893..bee12d48 100644
    const makeRelayClient = (relayConfig: {
      readonly url: string;
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 452addfb..f5184f6e 100644
+index 395afcf5..c54b4392 100644
 --- a/apps/server/src/server.ts
 +++ b/apps/server/src/server.ts
-@@ -882,6 +882,13 @@ const layerMakeServer = Layer.unwrap(
+@@ -958,6 +958,13 @@ const layerMakeServer = Layer.unwrap(
      const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
        Effect.gen(function* () {
          const cloudLink = yield* CloudLink.CloudLink;
@@ -206,6 +206,38 @@ index 452addfb..f5184f6e 100644
 +          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
 +          return;
 +        }
-         const releaseManagedTunnel = cloudLink.releaseManagedTunnelOnShutdown().pipe(
-           Effect.timeout("10 seconds"),
-           Effect.tap((released) =>
+         // CloudLink unlinks on startup when the policy turns Connect off; nothing to restore.
+         if (!ManagedLimits.allowsConnect(yield* ManagedPolicy.ManagedPolicy)) {
+           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
+diff --git a/apps/server/src/cloud/relayTracing.test.ts b/apps/server/src/cloud/relayTracing.test.ts
+index 34fcaa74..e987f7f4 100644
+--- a/apps/server/src/cloud/relayTracing.test.ts
++++ b/apps/server/src/cloud/relayTracing.test.ts
+@@ -14,10 +14,11 @@ import { relayLayer } from "./relayTracing.ts";
+ const tracesTo = (policy?: ManagedPolicyDocument) =>
+   Effect.service(RelayTracing.RelayClientTracer).pipe(
+     Effect.provide(
+-      relayLayer(
+-        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
+-        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
+-      ).pipe(
++      relayLayer({
++        serviceName: "t3code-server",
++        runtime: "node",
++        client: "environment-server",
++      }).pipe(
+         Layer.provide(ManagedPolicy.layerTest(policy)),
+         Layer.provide(
+           ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
+@@ -30,9 +31,9 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
+     Effect.map(Option.isSome),
+   );
+ 
+-it.effect("a policy with telemetry off stops relay tracing to T3 Connect", () =>
++it.effect("relay tracing to T3 Connect is removed in unplugged builds", () =>
+   Effect.gen(function* () {
+-    assert.isTrue(yield* tracesTo());
++    assert.isFalse(yield* tracesTo());
+     assert.isFalse(
+       yield* tracesTo({
+         schemaVersion: 1,

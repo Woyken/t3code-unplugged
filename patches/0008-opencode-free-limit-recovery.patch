@@ -1,9 +1,9 @@
 diff --git a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
-index 79f6d5f9..4fea89ab 100644
+index 71fb1d70..70cfba85 100644
 --- a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
 +++ b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
-@@ -76,6 +76,19 @@ export class OpenCode2Client extends Context.Service<
- const SILENT_STREAM_TIMEOUT = "45 seconds";
+@@ -77,6 +77,19 @@ const SILENT_STREAM_TIMEOUT = "45 seconds";
+ const SUBSCRIPTION_TIMEOUT = "10 seconds";
  
  const decodeEvent = Schema.decodeUnknownResult(Schema.fromJsonString(OpenCodeEvent));
 +// @opencode/protocol 2.0.28 predates `retryAfterMs`, so the typed event decode
@@ -22,7 +22,7 @@ index 79f6d5f9..4fea89ab 100644
  const decodeEnvelope = Schema.decodeUnknownOption(
    Schema.fromJsonString(
      Schema.Struct({
-@@ -128,9 +141,23 @@ const readEvents = HttpClient.get("/api/event", {
+@@ -129,9 +142,23 @@ const readEvents = HttpClient.get("/api/event", {
        Stream.pipeThroughChannel(Sse.decode()),
        Stream.filterMapEffect((frame) => {
          const decoded = decodeEvent(frame.data);
@@ -50,10 +50,10 @@ index 79f6d5f9..4fea89ab 100644
      ),
    ),
 diff --git a/packages/provider-opencode/src/server/v2/adapter.ts b/packages/provider-opencode/src/server/v2/adapter.ts
-index 74695bf6..53c6c0ad 100644
+index 81871b4b..da3c087c 100644
 --- a/packages/provider-opencode/src/server/v2/adapter.ts
 +++ b/packages/provider-opencode/src/server/v2/adapter.ts
-@@ -2127,16 +2127,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
+@@ -2159,12 +2159,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
            return yield* endExecution(state, turn, { status: "interrupted" });
          case "session.execution.failed": {
            const { type, message, status, response } = event.data.error;
@@ -65,17 +65,19 @@ index 74695bf6..53c6c0ad 100644
 +          ).retryAfterMs;
            // OpenCode types an empty balance as provider.quota too, but it answers
            // that with HTTP 402 and it never resets. Usage windows and budgets are 429.
+           const claudeLimit = claudeUsageLimit(message);
            const usageLimit =
--            (type === "provider.quota" && status !== 402) || type === "provider.rate-limit";
-+            (type === "provider.quota" && status !== 402) ||
-+            type === "provider.rate-limit" ||
-+            type === "provider.free-limit";
+             (type === "provider.quota" && status !== 402) ||
+             type === "provider.rate-limit" ||
++            type === "provider.free-limit" ||
+             claudeLimit !== undefined;
            return yield* endExecution(state, turn, {
              status: "failed",
-             failure: makeProviderFailure({
+@@ -2172,7 +2179,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                message: readableProviderErrorMessage(message, status, response?.body),
                code: type,
                class: usageLimit ? "usage_limit" : "provider_error",
+-              resetAt: claudeLimit?.resetAt ?? null,
 +              // The free tier reports its reset only as a delay, and T3's
 +              // usage-limit recovery needs an absolute time to resume at.
 +              resetAt:
@@ -83,7 +85,7 @@ index 74695bf6..53c6c0ad 100644
 +                  ? DateTime.formatIso(
 +                      DateTime.add(yield* DateTime.now, { milliseconds: retryAfterMs }),
 +                    )
-+                  : null,
++                  : (claudeLimit?.resetAt ?? null),
              }),
            });
          }
