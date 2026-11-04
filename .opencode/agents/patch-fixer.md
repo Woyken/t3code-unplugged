@@ -2,7 +2,7 @@
 description: Repairs the unplugged patch series when a new upstream tag stops applying.
 mode: primary
 model: opencode/deepseek-v4.1-flash-free#high
-steps: 60
+steps: 100
 permissions:
   # Deny everything first, then allow only what the repair task needs. Later
   # matching rules win, so the narrow allows and denies below override this.
@@ -57,6 +57,9 @@ permissions:
     resource: "git checkout -- upstream-base.txt"
     effect: allow
   - action: shell
+    resource: "git status *"
+    effect: allow
+  - action: shell
     resource: "git -C upstream status *"
     effect: allow
   - action: shell
@@ -96,6 +99,11 @@ permissions:
     effect: allow
   - action: shell
     resource: "bash scripts/verify-strip.sh upstream"
+    effect: allow
+  # typecheck-patches.sh is step 9 of the fixer prompt and the last gate
+  # before upstream-base.txt moves; without this rule the agent cannot finish.
+  - action: shell
+    resource: "bash scripts/typecheck-patches.sh upstream"
     effect: allow
   - action: shell
     resource: "wc *"

@@ -16,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check fixer permissions
+        run: |
+          python3 scripts/check-fixer-permissions.py patch-fixer
+          python3 scripts/check-fixer-permissions.py release-fixer
+
       - uses: voidzero-dev/setup-vp@v1
         with:
           cache: false

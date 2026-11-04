@@ -129,6 +129,10 @@ environment secret `OPENCODE_API_KEY` in the repository environment `autoFixer`.
 The free OpenCode model is limited-time; it still requires an OpenCode Console
 API key, but not a paid DeepSeek key.
 
+Before the agent starts, the workflow checks its resolved shell allowlist
+against the commands the prompt requires. A missing permission fails fast
+instead of consuming the agent's step budget.
+
 The result is validated in a clean checkout and published as a regular PR on
 `patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
 never receive a GitHub write token. The publish job runs

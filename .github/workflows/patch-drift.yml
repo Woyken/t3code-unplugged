@@ -420,6 +420,15 @@ jobs:
             --version "${OPENCODE_VERSION}" --no-modify-path
           "$HOME/.opencode/bin/opencode" --version
 
+      # The fixer runs with a strict allowlist. A prompt step that names a
+      # command the allowlist does not cover burns the agent's step budget and
+      # fails late, so fail before the model runs instead.
+      - name: Check fixer permissions
+        shell: bash
+        env:
+          AGENT: ${{ steps.prompt.outputs.agent }}
+        run: python3 scripts/check-fixer-permissions.py "${AGENT}"
+
       - name: Run drift fixer
         shell: bash
         env:
@@ -523,6 +532,22 @@ jobs:
               > fix-input/changed-files.txt
           fi
           cat fix-input/changed-files.txt
+
+      # Keep the agent's edits even when the validation step rejects them, so a
+      # failed attempt can be reviewed or salvaged instead of disappearing.
+      - name: Capture agent changes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${MODE}" == "patch" ]]; then
+            paths=(patches upstream-base.txt)
+          else
+            paths=(.github/workflows/release.yml scripts README.md)
+          fi
+          git add -A -- "${paths[@]}" 2>/dev/null || true
+          git diff --cached --binary -- "${paths[@]}" > fix-input/agent.diff || true
+          git status --short -- "${paths[@]}" > fix-input/agent-status.txt || true
 
       - name: Upload proposed fix
         if: always()
