@@ -197,6 +197,53 @@ permissions:
   - action: shell
     resource: "tail *"
     effect: allow
+  # Read-only commands the model reaches for while orienting. Keep these
+  # narrow: named failure files, workspace listings, and repo history.
+  - action: shell
+    resource: "cat fix-input/failed-jobs.txt"
+    effect: allow
+  - action: shell
+    resource: "cat fix-input/failure.log"
+    effect: allow
+  - action: shell
+    resource: "cat fix-input/apply.log"
+    effect: allow
+  - action: shell
+    resource: "cat fix-input/upstream-build-diff.txt"
+    effect: allow
+  - action: shell
+    resource: "cat fix-input/upstream-build-diff-stat.txt"
+    effect: allow
+  - action: shell
+    resource: "ls"
+    effect: allow
+  - action: shell
+    resource: "ls -la"
+    effect: allow
+  - action: shell
+    resource: "ls -la ."
+    effect: allow
+  - action: shell
+    resource: "ls -la fix-input"
+    effect: allow
+  - action: shell
+    resource: "ls -la patches"
+    effect: allow
+  - action: shell
+    resource: "ls -la scripts"
+    effect: allow
+  - action: shell
+    resource: "ls -la upstream"
+    effect: allow
+  - action: shell
+    resource: "pwd"
+    effect: allow
+  - action: shell
+    resource: "git log *"
+    effect: allow
+  - action: shell
+    resource: "git show *"
+    effect: allow
 
   # The fixer has no GitHub token and must not reach the network. Deny these
   # after the broad git allow so they win.

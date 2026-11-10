@@ -55,6 +55,11 @@ Suggested method:
    minutes. Fix the patch that causes the error, not `upstream/`.
 10. Only after all three commands pass, update `upstream-base.txt` to `{{TAG}}`.
 
+Work efficiently. Use Read, Glob, and Grep for source files. The allowlist
+covers `cat fix-input/apply.log`, `ls -la`, `pwd`, `git log`, and `git show`,
+but not compound commands, `echo` separators, or paths outside the workspace.
+A denied command still costs a step.
+
 Rules:
 
 - Do not modify `scripts/`, `.github/`, `README.md`, `fix-input/`, or any other

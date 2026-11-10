@@ -31,6 +31,11 @@ REQUIRED = {
         "git rm patches/0001-example.patch",
         "git status --short",
         "wc -l patches/0001-example.patch",
+        "cat fix-input/apply.log",
+        "ls -la",
+        "pwd",
+        "git log --oneline -5",
+        "git show HEAD:README.md",
     ],
     "release-fixer": [
         "bash scripts/apply-patches.sh upstream",
@@ -51,6 +56,12 @@ REQUIRED = {
         "git -C upstream reset --hard v0.0.0",
         "git -C upstream clean -fd",
         "git -C upstream tag --list",
+        "cat fix-input/failure.log",
+        "cat fix-input/upstream-build-diff.txt",
+        "ls -la",
+        "pwd",
+        "git log --oneline -5",
+        "git show HEAD:README.md",
     ],
 }
 

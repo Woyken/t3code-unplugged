@@ -512,7 +512,7 @@ jobs:
             echo "::warning::Redacted the API key from the OpenCode log."
           fi
           if grep -rqF -- "${OPENCODE_API_KEY}" \
-            patches .github/workflows/release.yml scripts README.md fix-input/prompt.md 2>/dev/null; then
+            patches .github/workflows/release.yml scripts README.md upstream-base.txt fix-input/prompt.md 2>/dev/null; then
             echo "::error::The fixer wrote the API key into the repository files or prompt."
             exit 1
           fi
