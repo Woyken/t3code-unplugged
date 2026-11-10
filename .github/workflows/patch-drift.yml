@@ -60,6 +60,7 @@ jobs:
       mode: ${{ steps.classify.outputs.mode }}
       tag: ${{ steps.run.outputs.tag }}
       base: ${{ steps.run.outputs.base }}
+      previous: ${{ steps.run.outputs.previous }}
       run_url: ${{ steps.run.outputs.run_url }}
       failed_jobs: ${{ steps.run.outputs.failed_jobs }}
       failed_patch: ${{ steps.check.outputs.failed_patch }}
@@ -142,6 +143,21 @@ jobs:
             exit 1
           fi
 
+          # The patch base is not a useful comparison for build drift: a patch
+          # refresh usually moves it to the same tag that just failed to build.
+          # Compare with the previous stable upstream release instead.
+          previous=""
+          while IFS= read -r candidate; do
+            if [[ "${candidate}" == "${tag}" ]]; then
+              break
+            fi
+            previous="${candidate}"
+          done < <(git ls-remote --tags --refs https://github.com/pingdotgg/t3code.git 'v*' \
+            | awk '{print $2}' \
+            | sed 's#^refs/tags/##' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V)
+
           base="$(cat upstream-base.txt)"
           mkdir -p fix-input
           printf '%s\n' "${failed_jobs}" > fix-input/failed-jobs.txt
@@ -150,7 +166,8 @@ jobs:
             {
               echo "Release run: ${run_url}"
               echo "Upstream tag: ${tag}"
-              echo "Previous base: ${base}"
+              echo "Previous upstream tag: ${previous:-none}"
+              echo "Patch base: ${base}"
               echo
               echo "## Failed jobs"
               printf '%s\n' "${failed_jobs}"
@@ -176,6 +193,7 @@ jobs:
           {
             echo "tag=${tag}"
             echo "base=${base}"
+            echo "previous=${previous}"
             echo "run_url=${run_url}"
             echo "build_failure=${build_failure}"
             echo "failed_jobs<<EOF"
@@ -355,6 +373,7 @@ jobs:
       MODE: ${{ needs.detect.outputs.mode }}
       TAG: ${{ needs.detect.outputs.tag }}
       BASE: ${{ needs.detect.outputs.base }}
+      PREVIOUS: ${{ needs.detect.outputs.previous }}
       RUN_URL: ${{ needs.detect.outputs.run_url }}
       # Bump deliberately; the workflow installs this exact OpenCode V2 version.
       OPENCODE_VERSION: "2.2.0"
@@ -378,10 +397,12 @@ jobs:
           # credentials are persisted into the throwaway tree.
           git clone --depth 1 --branch "${TAG}" \
             https://github.com/pingdotgg/t3code.git upstream
-          if [[ "${BASE}" != "${TAG}" ]]; then
-            git -C upstream fetch --depth 1 origin "refs/tags/${BASE}:refs/tags/${BASE}"
-          fi
-          git -C upstream tag --list "${BASE}" "${TAG}"
+          for ref in "${BASE}" "${PREVIOUS}"; do
+            if [[ -n "${ref}" && "${ref}" != "${TAG}" ]]; then
+              git -C upstream fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}"
+            fi
+          done
+          git -C upstream tag --list "${BASE}" "${PREVIOUS}" "${TAG}"
 
           if [[ "${MODE}" == "build" ]]; then
             bash scripts/apply-patches.sh upstream
@@ -393,6 +414,35 @@ jobs:
           node-version-file: upstream/package.json
           cache: false
           run-install: false
+
+      # Build drift usually comes from a change in upstream's own release
+      # workflow. Give the fixer the one comparison that matters, so it does
+      # not spend its step budget rediscovering it (or trying to fetch, which
+      # its allowlist forbids).
+      - name: Build reference diff
+        if: needs.detect.outputs.mode == 'build' && needs.detect.outputs.previous != '' && needs.detect.outputs.previous != needs.detect.outputs.tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            .github/workflows
+            scripts
+            apps/desktop
+            apps/server/scripts
+            package.json
+            pnpm-workspace.yaml
+            native
+          )
+          git -C upstream diff --stat "${PREVIOUS}" "${TAG}" -- "${paths[@]}" \
+            > fix-input/upstream-build-diff-stat.txt
+          git -C upstream diff "${PREVIOUS}" "${TAG}" -- "${paths[@]}" \
+            > fix-input/upstream-build-diff.txt
+          if [[ "$(wc -c < fix-input/upstream-build-diff.txt)" -gt 250000 ]]; then
+            head -c 250000 fix-input/upstream-build-diff.txt > fix-input/upstream-build-diff.txt.tmp
+            mv fix-input/upstream-build-diff.txt.tmp fix-input/upstream-build-diff.txt
+          fi
+          echo "Wrote build diff from ${PREVIOUS} to ${TAG}."
+          cat fix-input/upstream-build-diff-stat.txt
 
       - name: Render prompt
         id: prompt
@@ -406,8 +456,10 @@ jobs:
             agent="release-fixer"
             template=".github/prompts/release-fixer.md"
           fi
+          previous="${PREVIOUS:-none}"
           sed -e "s/{{TAG}}/${TAG}/g" \
               -e "s/{{BASE}}/${BASE}/g" \
+              -e "s/{{PREVIOUS}}/${previous}/g" \
               -e "s#{{RUN_URL}}#${RUN_URL}#g" \
               "${template}" > fix-input/prompt.md
           echo "agent=${agent}" >> "$GITHUB_OUTPUT"
@@ -504,12 +556,16 @@ jobs:
             git diff --cached --stat -- patches upstream-base.txt > fix-input/proposed-stat.txt
             git diff --cached --name-only -- patches upstream-base.txt > fix-input/changed-files.txt
           else
-            git add -A -- .github/workflows/release.yml scripts README.md
+            # A build failure can need a small patch when upstream's packaging
+            # logic itself is incompatible with the artifact contract (for
+            # example a native-only step that exceeds a documented limit).
+            # The publish job still applies and typechecks the whole series.
+            git add -A -- .github/workflows/release.yml scripts README.md patches upstream-base.txt
 
             unexpected="$(
               { git diff --name-only; git diff --cached --name-only; git ls-files --others --exclude-standard; } \
                 | sort -u \
-                | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+)$' \
+                | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
                 | grep -vE '^(upstream$|upstream/|fix-input$|fix-input/)' \
                 || true
             )"
@@ -519,16 +575,21 @@ jobs:
               exit 1
             fi
 
+            if [[ "$(cat upstream-base.txt)" != "${TAG}" ]]; then
+              echo "::error::upstream-base.txt must stay at ${TAG} for build drift."
+              exit 1
+            fi
+
             if [[ -z "$(git diff --cached --name-only)" ]]; then
               echo "::error::The fixer made no changes. The failure may not be build drift."
               exit 1
             fi
 
-            git diff --cached --binary -- .github/workflows/release.yml scripts README.md \
+            git diff --cached --binary -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
               > fix-input/proposed.diff
-            git diff --cached --stat -- .github/workflows/release.yml scripts README.md \
+            git diff --cached --stat -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
               > fix-input/proposed-stat.txt
-            git diff --cached --name-only -- .github/workflows/release.yml scripts README.md \
+            git diff --cached --name-only -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
               > fix-input/changed-files.txt
           fi
           cat fix-input/changed-files.txt
@@ -543,7 +604,7 @@ jobs:
           if [[ "${MODE}" == "patch" ]]; then
             paths=(patches upstream-base.txt)
           else
-            paths=(.github/workflows/release.yml scripts README.md)
+            paths=(.github/workflows/release.yml scripts README.md patches upstream-base.txt)
           fi
           git add -A -- "${paths[@]}" 2>/dev/null || true
           git diff --cached --binary -- "${paths[@]}" > fix-input/agent.diff || true
@@ -576,6 +637,7 @@ jobs:
       MODE: ${{ needs.detect.outputs.mode }}
       TAG: ${{ needs.detect.outputs.tag }}
       BASE: ${{ needs.detect.outputs.base }}
+      PREVIOUS: ${{ needs.detect.outputs.previous }}
       BRANCH: ${{ needs.detect.outputs.branch }}
       FAILED_JOBS: ${{ needs.detect.outputs.failed_jobs }}
       RELEASE_RUN_URL: ${{ needs.detect.outputs.run_url }}
@@ -627,11 +689,15 @@ jobs:
             fi
           else
             bad="$(printf '%s\n' "${changed}" \
-              | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+)$' \
+              | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
               | grep -v '^$' || true)"
             if [[ -n "${bad}" ]]; then
               echo "::error::Proposed fix touches disallowed paths:"
               echo "${bad}"
+              exit 1
+            fi
+            if [[ "$(cat upstream-base.txt)" != "${TAG}" ]]; then
+              echo "::error::upstream-base.txt is not ${TAG}."
               exit 1
             fi
             for script in scripts/*.sh; do
@@ -654,7 +720,7 @@ jobs:
             git add -A -- patches upstream-base.txt
             message="Refresh unplugged patches for ${TAG}"
           else
-            git add -A -- .github/workflows/release.yml scripts README.md
+            git add -A -- .github/workflows/release.yml scripts README.md patches upstream-base.txt
             message="Repair release build for ${TAG}"
           fi
 
@@ -686,14 +752,15 @@ jobs:
             validation="- \`bash -n\` passed for every script in \`scripts/\`.
           - Every workflow file parses as YAML.
           - \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout (apply, \`verify-strip\`, and \`tsc\`).
-          - The proposed diff only touches \`.github/workflows/release.yml\`, \`scripts/\`, and \`README.md\`."
+          - The proposed diff only touches \`.github/workflows/release.yml\`, \`scripts/\`, \`README.md\`, \`patches/\`, and \`upstream-base.txt\`."
           fi
 
           cat > "${PROPOSAL}/pr-body.md" <<EOF
           ## Automated release repair
 
           Upstream tag: \`${TAG}\`
-          Previous base: \`${BASE}\`
+          Previous upstream tag: \`${PREVIOUS:-none}\`
+          Patch base: \`${BASE}\`
           Failure: ${trigger}
           Model: \`opencode/deepseek-v4.1-flash-free#high\`
 
@@ -747,6 +814,7 @@ jobs:
       MODE: ${{ needs.detect.outputs.mode }}
       TAG: ${{ needs.detect.outputs.tag }}
       BASE: ${{ needs.detect.outputs.base }}
+      PREVIOUS: ${{ needs.detect.outputs.previous }}
       LABEL: ${{ needs.detect.outputs.label }}
       TITLE: ${{ needs.detect.outputs.title }}
       FAILED_JOBS: ${{ needs.detect.outputs.failed_jobs }}
@@ -833,7 +901,8 @@ jobs:
               printf '%s\n' "${FAILED_JOBS}" | sed 's/^/  - /'
               echo "- Status: ${status}"
               echo "- Workflow run: ${RUN_URL}"
-              echo "- Previous base: \`${BASE}\`"
+              echo "- Previous upstream tag: \`${PREVIOUS:-none}\`"
+              echo "- Patch base: \`${BASE}\`"
             } > "${RUNNER_TEMP}/drift.md"
           fi
 

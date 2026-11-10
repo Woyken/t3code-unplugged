@@ -69,6 +69,14 @@ the `retryAfterMs` delay newer OpenCode servers report, so the existing
 auto-resume setting can schedule the continuation at the real reset time.
 Remove the patch once the fix lands upstream.
 
+`0009-skip-windows-server-compile-cache.patch` keeps the native Windows build
+inside upstream's 80-file packaged-payload limit. Upstream cross-builds Windows
+releases on Linux, where its `afterPack` hook cannot run the packaged executable
+and skips the server compile cache. A native Windows build would generate that
+cache (one loose file per server module), so the patch skips it there too.
+Remove the patch if upstream starts generating the cache in its own Windows
+artifacts.
+
 ```
 ./scripts/apply-patches.sh /path/to/upstream-checkout
 ./scripts/verify-strip.sh /path/to/upstream-checkout
@@ -115,8 +123,12 @@ repairs two kinds of drift in the same flow:
   `patches/` and `upstream-base.txt`.
 - **Build drift**: the series still applies, but a build or publish step no
   longer matches a new upstream tag. The `release-fixer` agent gets the failed
-  job logs and may update `.github/workflows/release.yml`, `scripts/`, and
-  `README.md`, but not the patch series or other workflows.
+  job logs plus a build-file diff from the previous stable upstream tag to the
+  failed one, so it can see how upstream changed its own release process. It may
+  update `.github/workflows/release.yml`, `scripts/`, and `README.md`; when the
+  cause is inside upstream's packaging logic, it may also add or adjust a patch
+  in `patches/`. It cannot touch other workflows, and `upstream-base.txt` must
+  stay at the tag being built.
 
 The Linux CLI job smoke-tests the packaged archive (`t3 --version` and a real
 `t3 serve` request) and blocks the release when the binary does not answer. That
@@ -159,9 +171,10 @@ matching open issues are closed automatically. The fixers run on `main`; the
 `autoFixer` environment is restricted to that branch.
 
 Review AI-generated PRs before merging. The patch fixer changes the patch
-series; the release fixer can change the release workflow and build scripts.
-`verify-strip` checks the unplugged guarantees, but it cannot prove that a patch
-or workflow change is semantically correct or benign.
+series; the release fixer can change the release workflow, build scripts, and,
+for build drift, the patch series. `verify-strip` checks the unplugged
+guarantees, but it cannot prove that a patch or workflow change is semantically
+correct or benign.
 
 ## Tests
 

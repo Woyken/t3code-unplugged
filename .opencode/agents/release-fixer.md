@@ -1,8 +1,8 @@
 ---
-description: Repairs the release build when a new upstream tag changes build scripts or commands.
+description: Repairs the release build when a new upstream tag changes build scripts, commands, or packaging.
 mode: primary
 model: opencode/deepseek-v4.1-flash-free#high
-steps: 80
+steps: 160
 permissions:
   # Deny everything first, then allow only what the repair task needs. Later
   # matching rules win, so the narrow allows and denies below override this.
@@ -38,6 +38,15 @@ permissions:
   - action: edit
     resource: "README.md"
     effect: allow
+  # A build failure can be caused by upstream packaging logic that the workflow
+  # cannot control. Let the fixer add or adjust a patch, but keep the base
+  # marker at the tag being built.
+  - action: edit
+    resource: "patches/**"
+    effect: allow
+  - action: edit
+    resource: "upstream-base.txt"
+    effect: allow
   - action: edit
     resource: "upstream/**"
     effect: allow
@@ -69,10 +78,16 @@ permissions:
     resource: "git diff -- README.md"
     effect: allow
   - action: shell
+    resource: "git diff -- patches"
+    effect: allow
+  - action: shell
+    resource: "git diff -- upstream-base.txt"
+    effect: allow
+  - action: shell
     resource: "git diff --stat"
     effect: allow
   - action: shell
-    resource: "git diff --stat -- .github/workflows/release.yml scripts README.md"
+    resource: "git diff --stat -- .github/workflows/release.yml scripts README.md patches upstream-base.txt"
     effect: allow
   - action: shell
     resource: "git diff --check"
@@ -93,6 +108,12 @@ permissions:
     resource: "git checkout -- README.md"
     effect: allow
   - action: shell
+    resource: "git checkout -- patches/"
+    effect: allow
+  - action: shell
+    resource: "git checkout -- upstream-base.txt"
+    effect: allow
+  - action: shell
     resource: "git restore -- .github/workflows/release.yml"
     effect: allow
   - action: shell
@@ -100,6 +121,12 @@ permissions:
     effect: allow
   - action: shell
     resource: "git restore -- README.md"
+    effect: allow
+  - action: shell
+    resource: "git restore -- patches/"
+    effect: allow
+  - action: shell
+    resource: "git restore -- upstream-base.txt"
     effect: allow
   - action: shell
     resource: "git -C upstream status *"
@@ -142,6 +169,9 @@ permissions:
     effect: allow
   - action: shell
     resource: "bash scripts/verify-strip.sh upstream"
+    effect: allow
+  - action: shell
+    resource: "bash scripts/typecheck-patches.sh upstream"
     effect: allow
   - action: shell
     resource: "bash -n *"
