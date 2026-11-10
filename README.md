@@ -69,6 +69,14 @@ the `retryAfterMs` delay newer OpenCode servers report, so the existing
 auto-resume setting can schedule the continuation at the real reset time.
 Remove the patch once the fix lands upstream.
 
+`0009-skip-windows-server-compile-cache.patch` keeps the native Windows build
+inside upstream's 80-file packaged-payload limit. Upstream cross-builds Windows
+releases on Linux, where its `afterPack` hook cannot run the packaged executable
+and skips the server compile cache. A native Windows build would generate that
+cache (one loose file per server module), so the patch skips it there too.
+Remove the patch if upstream starts generating the cache in its own Windows
+artifacts.
+
 ```
 ./scripts/apply-patches.sh /path/to/upstream-checkout
 ./scripts/verify-strip.sh /path/to/upstream-checkout
@@ -115,8 +123,12 @@ repairs two kinds of drift in the same flow:
   `patches/` and `upstream-base.txt`.
 - **Build drift**: the series still applies, but a build or publish step no
   longer matches a new upstream tag. The `release-fixer` agent gets the failed
-  job logs and may update `.github/workflows/release.yml`, `scripts/`, and
-  `README.md`, but not the patch series or other workflows.
+  job logs plus a build-file diff from the previous stable upstream tag to the
+  failed one, so it can see how upstream changed its own release process. It may
+  update `.github/workflows/release.yml`, `scripts/`, and `README.md`; when the
+  cause is inside upstream's packaging logic, it may also add or adjust a patch
+  in `patches/`. It cannot touch other workflows, and `upstream-base.txt` must
+  stay at the tag being built.
 
 The Linux CLI job smoke-tests the packaged archive (`t3 --version` and a real
 `t3 serve` request) and blocks the release when the binary does not answer. That
@@ -129,9 +141,13 @@ environment secret `OPENCODE_API_KEY` in the repository environment `autoFixer`.
 The free OpenCode model is limited-time; it still requires an OpenCode Console
 API key, but not a paid DeepSeek key.
 
-Before the agent starts, the workflow checks its resolved shell allowlist
-against the commands the prompt requires. A missing permission fails fast
-instead of consuming the agent's step budget.
+Both agents allow normal shell and file access by default. The deny rules keep
+network egress, package installs, inline interpreters, secret or environment
+reads, destructive system commands, and paths outside the workspace off limits;
+this matters because the agent runs with `OPENCODE_API_KEY` in its environment
+and reads untrusted upstream code. Before the agent starts, the workflow checks
+that every command the prompt requires is not blocked by a deny rule. A missing
+permission fails fast instead of consuming the agent's step budget.
 
 The result is validated in a clean checkout and published as a regular PR on
 `patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
@@ -159,9 +175,11 @@ matching open issues are closed automatically. The fixers run on `main`; the
 `autoFixer` environment is restricted to that branch.
 
 Review AI-generated PRs before merging. The patch fixer changes the patch
-series; the release fixer can change the release workflow and build scripts.
-`verify-strip` checks the unplugged guarantees, but it cannot prove that a patch
-or workflow change is semantically correct or benign.
+series; the release fixer can change the release workflow, build scripts, and,
+for build drift, the patch series. Both agents have broad local shell access;
+the deny rules are guardrails against the most dangerous operations, not a
+sandbox. `verify-strip` checks the unplugged guarantees, but it cannot prove
+that a patch or workflow change is semantically correct or benign.
 
 ## Tests
 

@@ -55,6 +55,11 @@ Suggested method:
    minutes. Fix the patch that causes the error, not `upstream/`.
 10. Only after all three commands pass, update `upstream-base.txt` to `{{TAG}}`.
 
+Work efficiently. Most normal shell and file tools are available. Network
+tools, package installs, inline interpreters (`node -e`, `python -c`,
+`bash -c`), secret or environment reads, destructive system commands, and paths
+outside the workspace are still denied. A denied command still costs a step.
+
 Rules:
 
 - Do not modify `scripts/`, `.github/`, `README.md`, `fix-input/`, or any other
