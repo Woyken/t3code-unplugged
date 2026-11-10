@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Check that a fixer agent's shell allowlist covers the commands it must run.
+"""Check that a fixer agent's deny rules do not block commands it must run.
 
-The drift fixers use a deny-by-default shell allowlist. When a prompt gains a
-new command, forgetting its allow rule does not fail until the agent has already
-spent its step budget on permission errors. Run this before the agent starts,
-and in CI, so the mismatch is caught immediately.
+The drift fixers allow normal tools by default and deny network, secrets,
+package installs, inline interpreters, and destructive commands. When a prompt
+gains a new command, a broad deny rule can silently block it until the agent has
+already spent its step budget on permission errors. Run this before the agent
+starts, and in CI, so the mismatch is caught immediately.
 
 The required command lists are representative invocations of every command in
 the corresponding prompt. Keep them in sync with .github/prompts/<agent>.md.
@@ -64,6 +65,28 @@ REQUIRED = {
         "git show HEAD:README.md",
     ],
 }
+
+
+# Commands that must stay blocked no matter how the fixer is widened.
+FORBIDDEN = [
+    "curl https://example.com",
+    "wget https://example.com",
+    "env",
+    "printenv",
+    "node -e \"process.exit(0)\"",
+    "python3 -c \"print(1)\"",
+    "bash -c true",
+    "npm install",
+    "pnpm add example",
+    "git push origin main",
+    "git fetch origin",
+    "git config user.name example",
+    "cat .env",
+    "cat ~/.ssh/id_rsa",
+    "cat ~/.config/opencode/auth.json",
+    "chmod +x scripts/example.sh",
+    "rm -rf /",
+]
 
 
 def unquote(value: str) -> str:
@@ -141,6 +164,10 @@ def main() -> None:
         print(f"{effect(rules, command):5} {command}")
     if blocked:
         raise SystemExit("fixer permission check failed: " + ", ".join(blocked))
+
+    exposed = [command for command in FORBIDDEN if effect(rules, command) != "deny"]
+    if exposed:
+        raise SystemExit("fixer permission check failed; expected deny: " + ", ".join(exposed))
     print(f"fixer permissions OK for {agent_id}")
 
 

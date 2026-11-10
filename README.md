@@ -141,9 +141,13 @@ environment secret `OPENCODE_API_KEY` in the repository environment `autoFixer`.
 The free OpenCode model is limited-time; it still requires an OpenCode Console
 API key, but not a paid DeepSeek key.
 
-Before the agent starts, the workflow checks its resolved shell allowlist
-against the commands the prompt requires. A missing permission fails fast
-instead of consuming the agent's step budget.
+Both agents allow normal shell and file access by default. The deny rules keep
+network egress, package installs, inline interpreters, secret or environment
+reads, destructive system commands, and paths outside the workspace off limits;
+this matters because the agent runs with `OPENCODE_API_KEY` in its environment
+and reads untrusted upstream code. Before the agent starts, the workflow checks
+that every command the prompt requires is not blocked by a deny rule. A missing
+permission fails fast instead of consuming the agent's step budget.
 
 The result is validated in a clean checkout and published as a regular PR on
 `patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
@@ -172,9 +176,10 @@ matching open issues are closed automatically. The fixers run on `main`; the
 
 Review AI-generated PRs before merging. The patch fixer changes the patch
 series; the release fixer can change the release workflow, build scripts, and,
-for build drift, the patch series. `verify-strip` checks the unplugged
-guarantees, but it cannot prove that a patch or workflow change is semantically
-correct or benign.
+for build drift, the patch series. Both agents have broad local shell access;
+the deny rules are guardrails against the most dangerous operations, not a
+sandbox. `verify-strip` checks the unplugged guarantees, but it cannot prove
+that a patch or workflow change is semantically correct or benign.
 
 ## Tests
 

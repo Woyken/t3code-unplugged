@@ -76,13 +76,13 @@ Suggested method:
 6. If the failure is transient or unrelated to upstream build drift, leave the
    files unchanged and explain your reasoning.
 
-Work efficiently. Use Read, Glob, and Grep for source files. The allowlist does
-cover `cat fix-input/failure.log`, `cat fix-input/upstream-build-diff.txt`,
-`ls -la`, `pwd`, `git log`, and `git show`, but it does not cover compound
-commands, `echo` separators, or paths outside the workspace (`/tmp`, `/home`,
-pnpm stores). A denied command still costs a step. Make the first edit before
-step 40, then spend the remaining budget on validation and a concise final
-answer.
+Work efficiently. Most normal shell and file tools are available. Network
+tools, package installs, inline interpreters (`node -e`, `python -c`,
+`bash -c`), secret or environment reads, destructive system commands, and paths
+outside the workspace are still denied. Keep commands simple and use Read,
+Glob, and Grep for source files. A denied command still costs a step. Make the
+first edit before step 40, then spend the remaining budget on validation and a
+concise final answer.
 
 Rules:
 

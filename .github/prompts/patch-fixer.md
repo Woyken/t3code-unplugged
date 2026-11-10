@@ -55,10 +55,10 @@ Suggested method:
    minutes. Fix the patch that causes the error, not `upstream/`.
 10. Only after all three commands pass, update `upstream-base.txt` to `{{TAG}}`.
 
-Work efficiently. Use Read, Glob, and Grep for source files. The allowlist
-covers `cat fix-input/apply.log`, `ls -la`, `pwd`, `git log`, and `git show`,
-but not compound commands, `echo` separators, or paths outside the workspace.
-A denied command still costs a step.
+Work efficiently. Most normal shell and file tools are available. Network
+tools, package installs, inline interpreters (`node -e`, `python -c`,
+`bash -c`), secret or environment reads, destructive system commands, and paths
+outside the workspace are still denied. A denied command still costs a step.
 
 Rules:
 
