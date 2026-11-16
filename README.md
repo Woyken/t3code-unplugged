@@ -44,11 +44,16 @@ Artifacts:
 - `t3-X.Y.Z-unplugged.N-linux-x64.tar.gz` – standalone Linux CLI/server (x64)
 - `t3-X.Y.Z-unplugged.N-linux-arm64.tar.gz` – standalone Linux CLI/server (arm64)
 - `T3-Code-X.Y.Z-unplugged.N-x64.exe` – Windows NSIS installer
+- `T3-Code-X.Y.Z-unplugged.N-arm64.dmg` – macOS installer (Apple Silicon)
 - `t3code-unplugged-X.Y.Z-unplugged.N-android.apk` – Android APK
 - `latest.yml` + `T3-Code-X.Y.Z-unplugged.N-x64.exe.blockmap` – Windows updater metadata
 - `SHA256SUMS`
 
-Windows builds are unsigned, so SmartScreen may warn; the Android APK is
+Windows builds are unsigned, so SmartScreen may warn. The macOS build is
+unsigned and not notarized; macOS blocks it on first launch until you allow it
+under System Settings → Privacy & Security → Open Anyway. It is built for Apple
+Silicon only. Automatic updates require a signed macOS app, so the Mac build
+ships no updater feed and updates by downloading the next DMG. The Android APK is
 debug-signed. Windows and Linux CLI installs check this repository's releases for
 updates. Mobile OTA updates are disabled, and the Android app updates manually.
 
