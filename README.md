@@ -18,6 +18,7 @@ these patches.
 ## What a build keeps
 
 - Local and Tailscale remote access, pairing URLs, and direct/LAN connections.
+- Guest links over T3 Connect or a direct LAN/tailnet address, with no account.
 - Local logs, local trace files, and the Diagnostics process/resource views.
 - Every provider, project, thread, and editor feature.
 
