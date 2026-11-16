@@ -96,7 +96,7 @@ index 7140222478..0dcdcd7962 100644
    Effect.gen(function* () {
      const { guestShares, credential } = yield* shareThread;
 diff --git a/apps/server/src/guest/GuestShareService.ts b/apps/server/src/guest/GuestShareService.ts
-index 36be1d1e21..2117727ed7 100644
+index 36be1d1e21..cfe6e7ff72 100644
 --- a/apps/server/src/guest/GuestShareService.ts
 +++ b/apps/server/src/guest/GuestShareService.ts
 @@ -45,6 +45,7 @@ import {
@@ -150,7 +150,7 @@ index 36be1d1e21..2117727ed7 100644
    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
    const fileSystem = yield* FileSystem.FileSystem;
    const random = yield* SecureRandom.SecureRandom;
-@@ -282,6 +297,31 @@ const make = Effect.gen(function* () {
+@@ -282,6 +297,32 @@ const make = Effect.gen(function* () {
    const connectHostname = managedEndpoint.inspectConnector.pipe(
      Effect.map((facts) => facts?.hostname ?? null),
    );
@@ -166,23 +166,24 @@ index 36be1d1e21..2117727ed7 100644
 +    return endpoint === undefined ? null : originOf(endpoint.httpBaseUrl);
 +  });
 +  /** Whether the link's host still answers the way it did when the link was made. */
-+  const shareHostIsServed = (host: string) =>
-+    Effect.gen(function* () {
-+      if (!host.includes("://")) return (yield* connectHostname) === host;
-+      const origin = originOf(host);
-+      return (
-+        origin !== null &&
-+        (yield* directEndpoints.resolveAvailable()).some(
-+          (endpoint) => originOf(endpoint.httpBaseUrl) === origin,
-+        )
-+      );
-+    });
++  const shareHostIsServed = Effect.fn("GuestShareService.shareHostIsServed")(function* (
++    host: string,
++  ) {
++    if (!host.includes("://")) return (yield* connectHostname) === host;
++    const origin = originOf(host);
++    return (
++      origin !== null &&
++      (yield* directEndpoints.resolveAvailable()).some(
++        (endpoint) => originOf(endpoint.httpBaseUrl) === origin,
++      )
++    );
++  });
 +  const shareUrl = (host: string) =>
 +    host.includes("://") ? `${host}/guest` : `https://${host}/guest`;
    // A beta: while it is off, no link opens and every guest request is refused.
    const sharingEnabled = serverSettings.getSettings.pipe(
      Effect.map((settings) => settings.guestSharingEnabled),
-@@ -306,7 +346,7 @@ const make = Effect.gen(function* () {
+@@ -306,7 +347,7 @@ const make = Effect.gen(function* () {
        Effect.orDie,
      );
  
@@ -191,7 +192,7 @@ index 36be1d1e21..2117727ed7 100644
    const authorize = Effect.fn("GuestShareService.authorize")(function* (
      token: string,
      kind: "invite" | "session",
-@@ -328,7 +368,7 @@ const make = Effect.gen(function* () {
+@@ -328,7 +369,7 @@ const make = Effect.gen(function* () {
        thread.deletedAt !== null ||
        DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt) ||
        (kind === "session" && share.guestName === null) ||
@@ -200,7 +201,7 @@ index 36be1d1e21..2117727ed7 100644
      ) {
        return yield* inactive;
      }
-@@ -339,9 +379,9 @@ const make = Effect.gen(function* () {
+@@ -339,9 +380,9 @@ const make = Effect.gen(function* () {
      if (!(yield* sharingEnabled)) {
        return yield* new GuestShareCreateError({ reason: "disabled" });
      }
@@ -212,7 +213,7 @@ index 36be1d1e21..2117727ed7 100644
      }
      const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
      const now = yield* DateTime.now;
-@@ -363,7 +403,7 @@ const make = Effect.gen(function* () {
+@@ -363,7 +404,7 @@ const make = Effect.gen(function* () {
        return yield* new GuestShareCreateError({ reason: "changed" });
      }
      const credential = yield* signInvite(shareId);
@@ -221,7 +222,7 @@ index 36be1d1e21..2117727ed7 100644
    });
  
    const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
-@@ -378,7 +418,7 @@ const make = Effect.gen(function* () {
+@@ -378,7 +419,7 @@ const make = Effect.gen(function* () {
      // Guests have no client connection, so their events carry no surface.
      yield* analytics.record("feature.used", { feature: "guest_share.join" });
      const token = yield* signSession({ kind: "session", threadId: thread.id, shareId: share.id });
@@ -230,7 +231,7 @@ index 36be1d1e21..2117727ed7 100644
    });
  
    const check = Effect.fn("GuestShareService.check")(function* (session: string) {
-@@ -590,14 +630,14 @@ const make = Effect.gen(function* () {
+@@ -590,14 +631,14 @@ const make = Effect.gen(function* () {
          }),
        ),
        Stream.takeUntil((event) => event.type === "ended"),
