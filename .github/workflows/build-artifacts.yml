@@ -382,16 +382,32 @@ jobs:
           mkdir -p artifact
           installer="$(ls upstream/release/*.exe | head -n 1)"
           test -n "$installer"
-          manifest="upstream/release/latest.yml"
           blockmap="${installer}.blockmap"
-          test -f "$manifest"
           test -f "$blockmap"
-          # electron-updater downloads the URL in latest.yml verbatim, so the
-          # installer has to keep the name electron-builder gave it.
-          grep -Fq "url: $(basename "$installer")" "$manifest"
           cp "$installer" artifact/
-          cp "$manifest" artifact/
           cp "$blockmap" artifact/
+
+          # Upstream's build script sets no publish config for preview versions,
+          # so electron-builder writes no feed manifest for one. A release must
+          # still produce it, and a preview must not advertise itself as an
+          # update.
+          manifest="upstream/release/latest.yml"
+          if [[ -f "$manifest" ]]; then
+            # electron-updater downloads the URL in latest.yml verbatim, so the
+            # installer has to keep the name electron-builder gave it.
+            grep -Fq "url: $(basename "$installer")" "$manifest"
+            cp "$manifest" artifact/
+          else
+            case "${{ inputs.version }}" in
+              *-preview.*|-*-pr.*)
+                echo "Preview version: no latest.yml, as intended."
+                ;;
+              *)
+                echo "::error::Release build produced no latest.yml."
+                exit 1
+                ;;
+            esac
+          fi
           ls -lh artifact/
 
       - name: Upload installer
