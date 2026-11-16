@@ -15,7 +15,8 @@ Context:
 - Reference diff: `./fix-input/upstream-build-diff.txt` and
   `./fix-input/upstream-build-diff-stat.txt` (changes in build files from
   `{{PREVIOUS}}` to `{{TAG}}`, when available)
-- Release workflow: `.github/workflows/release.yml`
+- Release workflow: `.github/workflows/release.yml` (resolve, publish, cleanup)
+- Build jobs shared with PR previews: `.github/workflows/build-artifacts.yml`
 - Helper scripts: `scripts/`
 - Patch series: `patches/*.patch` (already applied to `upstream/`)
 - Base marker: `upstream-base.txt` (keep it at `{{TAG}}`)
@@ -26,8 +27,8 @@ release produces and how it is validated.
 Start with the reference diff. Build drift almost always comes from a change in
 upstream's own release workflow or packaging script. Read upstream's
 `.github/workflows/release.yml` and `release-desktop.yml` at `{{TAG}}` and
-compare them with this repository's `release.yml`. Upstream's own jobs are the
-reference for how the same artifact is built today.
+compare them with this repository's `build-artifacts.yml` and `release.yml`.
+Upstream's own jobs are the reference for how the same artifact is built today.
 
 Known failure classes:
 
@@ -42,9 +43,9 @@ Known failure classes:
 - **CLI smoke test** (`Smoke-test CLI archive`). Check whether upstream changed
   the `t3 serve` flags, archive layout, or first-run behavior in
   `apps/server/scripts/cli.ts` and `scripts/build-cli-archive.ts`, then update
-  the smoke invocation in `release.yml` to match. Never remove, skip, loosen,
-  or `continue-on-error` the smoke test; if the artifact is genuinely broken by
-  upstream code, explain that instead of weakening the check.
+  the smoke invocation in `build-artifacts.yml` to match. Never remove, skip,
+  loosen, or `continue-on-error` the smoke test; if the artifact is genuinely
+  broken by upstream code, explain that instead of weakening the check.
 - **Version or artifact mismatch**. Check
   `scripts/update-release-package-versions.ts` and upstream's release workflow
   for the current arguments and output names before changing this repository's
@@ -53,7 +54,8 @@ Known failure classes:
 Suggested method:
 
 1. Read the failure log, the reference diff, `README.md`, and the failing job's
-   steps in `.github/workflows/release.yml`.
+   steps in `.github/workflows/build-artifacts.yml` (or `release.yml` for the
+   resolve and publish jobs).
 2. Inspect the upstream change that caused the failure:
    `git -C upstream diff {{PREVIOUS}} {{TAG}} -- .github/workflows scripts apps/desktop apps/server/scripts package.json pnpm-workspace.yaml native`
    Read only the affected files; do not scan the whole upstream tree. If
@@ -87,7 +89,7 @@ concise final answer.
 Rules:
 
 - Do not edit `.github/prompts/`, `.opencode/`, or workflows other than
-  `release.yml`.
+  `release.yml` and `build-artifacts.yml`.
 - Do not change `upstream-base.txt` away from `{{TAG}}`.
 - Do not weaken patch application, `verify-strip`, typechecking, smoke tests,
   payload validation, signing, or release checks.
@@ -101,6 +103,7 @@ Rules:
   `git -C upstream reset --hard {{TAG}}` then
   `bash scripts/apply-patches.sh upstream`.
 - If you cannot fix it, restore your edits with
+  `git checkout -- .github/workflows/build-artifacts.yml`,
   `git checkout -- .github/workflows/release.yml`,
   `git checkout -- scripts/`, `git checkout -- README.md`,
   `git checkout -- patches/`, and `git checkout -- upstream-base.txt`,

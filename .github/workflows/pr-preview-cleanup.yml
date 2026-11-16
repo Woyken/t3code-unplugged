@@ -1,0 +1,50 @@
+name: PR preview cleanup
+
+# Deletes the preview release when its pull request closes or when the last
+# preview label is removed, so previews never accumulate on the Releases page.
+#
+# `pull_request_target` is used because a fork PR's `closed` event still needs a
+# write token. This workflow only runs `gh release delete` with a tag derived
+# from the PR number; it never checks out or executes pull request code, and the
+# workflow file itself always comes from the default branch.
+
+on:
+  pull_request_target:
+    types: [closed, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete preview release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      ACTION: ${{ github.event.action }}
+    steps:
+      - name: Delete preview release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${ACTION}" == "unlabeled" ]]; then
+            labels="$(jq -r '.pull_request.labels[].name' "${GITHUB_EVENT_PATH}")"
+            if grep -qE '^preview(:|$)' <<< "${labels}"; then
+              echo "Another preview label remains on PR #${PR}; keeping the preview."
+              exit 0
+            fi
+          fi
+
+          tag="pr-${PR}-preview"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release delete "${tag}" --yes --cleanup-tag
+            echo "Deleted ${tag}."
+          else
+            echo "No preview release for ${tag}."
+          fi

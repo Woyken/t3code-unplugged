@@ -108,7 +108,7 @@ jobs:
 
               while IFS= read -r job; do
                 case "${job}" in
-                  ""|"Resolve upstream tag"|"Verify patch series"|"Close resolved drift issue")
+                  ""|"Resolve upstream tag"|"Verify patch series"|"Build artifacts / Verify patch series"|"Close resolved drift issue")
                     ;;
                   *)
                     build_failure=true
@@ -512,7 +512,7 @@ jobs:
             echo "::warning::Redacted the API key from the OpenCode log."
           fi
           if grep -rqF -- "${OPENCODE_API_KEY}" \
-            patches .github/workflows/release.yml scripts README.md upstream-base.txt fix-input/prompt.md 2>/dev/null; then
+            patches .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md upstream-base.txt fix-input/prompt.md 2>/dev/null; then
             echo "::error::The fixer wrote the API key into the repository files or prompt."
             exit 1
           fi
@@ -560,12 +560,12 @@ jobs:
             # logic itself is incompatible with the artifact contract (for
             # example a native-only step that exceeds a documented limit).
             # The publish job still applies and typechecks the whole series.
-            git add -A -- .github/workflows/release.yml scripts README.md patches upstream-base.txt
+            git add -A -- .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt
 
             unexpected="$(
               { git diff --name-only; git diff --cached --name-only; git ls-files --others --exclude-standard; } \
                 | sort -u \
-                | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
+                | grep -vE '^(\.github/workflows/release\.yml|\.github/workflows/build-artifacts\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
                 | grep -vE '^(upstream$|upstream/|fix-input$|fix-input/)' \
                 || true
             )"
@@ -585,11 +585,11 @@ jobs:
               exit 1
             fi
 
-            git diff --cached --binary -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
+            git diff --cached --binary -- .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt \
               > fix-input/proposed.diff
-            git diff --cached --stat -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
+            git diff --cached --stat -- .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt \
               > fix-input/proposed-stat.txt
-            git diff --cached --name-only -- .github/workflows/release.yml scripts README.md patches upstream-base.txt \
+            git diff --cached --name-only -- .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt \
               > fix-input/changed-files.txt
           fi
           cat fix-input/changed-files.txt
@@ -604,7 +604,7 @@ jobs:
           if [[ "${MODE}" == "patch" ]]; then
             paths=(patches upstream-base.txt)
           else
-            paths=(.github/workflows/release.yml scripts README.md patches upstream-base.txt)
+            paths=(.github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt)
           fi
           git add -A -- "${paths[@]}" 2>/dev/null || true
           git diff --cached --binary -- "${paths[@]}" > fix-input/agent.diff || true
@@ -689,7 +689,7 @@ jobs:
             fi
           else
             bad="$(printf '%s\n' "${changed}" \
-              | grep -vE '^(\.github/workflows/release\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
+              | grep -vE '^(\.github/workflows/release\.yml|\.github/workflows/build-artifacts\.yml|README\.md|scripts/.+|patches/[0-9A-Za-z._-]+\.patch|upstream-base\.txt)$' \
               | grep -v '^$' || true)"
             if [[ -n "${bad}" ]]; then
               echo "::error::Proposed fix touches disallowed paths:"
@@ -720,7 +720,7 @@ jobs:
             git add -A -- patches upstream-base.txt
             message="Refresh unplugged patches for ${TAG}"
           else
-            git add -A -- .github/workflows/release.yml scripts README.md patches upstream-base.txt
+            git add -A -- .github/workflows/release.yml .github/workflows/build-artifacts.yml scripts README.md patches upstream-base.txt
             message="Repair release build for ${TAG}"
           fi
 
@@ -752,7 +752,7 @@ jobs:
             validation="- \`bash -n\` passed for every script in \`scripts/\`.
           - Every workflow file parses as YAML.
           - \`./scripts/check-patches.sh ${TAG}\` passed in a clean checkout (apply, \`verify-strip\`, and \`tsc\`).
-          - The proposed diff only touches \`.github/workflows/release.yml\`, \`scripts/\`, \`README.md\`, \`patches/\`, and \`upstream-base.txt\`."
+          - The proposed diff only touches \`.github/workflows/release.yml\`, \`.github/workflows/build-artifacts.yml\`, \`scripts/\`, \`README.md\`, \`patches/\`, and \`upstream-base.txt\`."
           fi
 
           cat > "${PROPOSAL}/pr-body.md" <<EOF

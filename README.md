@@ -60,6 +60,59 @@ updates. Mobile OTA updates are disabled, and the Android app updates manually.
 Release notes carry the upstream stable changelog, and the desktop update prompt
 shows those changes on the `latest` channel as well, not just on nightly builds.
 
+## PR preview builds
+
+A pull request can be installed and reviewed before it merges. The `PR preview
+build` workflow builds `<the PR's upstream-base.txt>` plus the PR's patch series
+and publishes the result as a prerelease, so no release is cut.
+
+Trigger it with the `preview:build` label, or manually:
+
+```
+gh workflow run pr-preview.yml -f pr=123
+gh workflow run pr-preview.yml -f pr=123 -f targets=android
+```
+
+Targets are `linux`, `windows`, `android`, `mac`, and `web` (default
+`linux,windows,android`). Labels choose targets per PR: `preview:linux`,
+`preview:windows`, `preview:android`, `preview:mac`, `preview:web`, or
+`preview:all`. A preview label is a standing subscription: every later push to
+the PR rebuilds. `windows` also builds the Linux x64 CLI, because the installer
+embeds it as its WSL sidecar.
+
+Create the labels once:
+
+```
+for label in preview:build preview:linux preview:windows preview:android preview:mac preview:web preview:all; do
+  gh label create "$label" --description "Build a PR preview" 2>/dev/null || true
+done
+```
+
+Like any `pull_request` workflow, a preview run uses the workflow file from the
+PR, and the publish job runs with a write token. That is the same trust boundary
+as merging: only people who can push a branch here can start a preview.
+
+Each preview is a prerelease tagged `pr-<number>-preview`, and a comment on the
+PR lists the direct download links. A new run replaces the previous release for
+that PR; closing the PR, or removing its last preview label, deletes it.
+
+The tag deliberately stays outside `vX.Y.Z-unplugged.*`: `Release` decides
+whether a tag was already released by scanning that namespace, so a preview tag
+in it would hide the real release. Versions are
+`X.Y.Z-preview.YYYYMMDD.<run>`, which upstream's desktop app treats as a preview
+build with no update feed, and prereleases are absent from `/releases/latest`,
+so an installed app is never offered a preview as an update. Windows previews are
+unsigned and the Android preview APK is debug-signed; macOS previews are unsigned
+and not notarized, like the release DMG.
+
+The `web` target is static assets, not a hosted app; the client still needs a
+reachable `t3` server. Previews use the `vp` install cache, while releases keep
+`cache: false` for a cold, reproducible build.
+
+Only branches in this repository are previewed: a fork PR does not get a write
+token on `pull_request`, and publishing a release needs one. Push the branch here
+first.
+
 ## Patches
 
 `patches/` is a `git apply` series against a specific upstream tag. The base
@@ -130,7 +183,8 @@ repairs two kinds of drift in the same flow:
   longer matches a new upstream tag. The `release-fixer` agent gets the failed
   job logs plus a build-file diff from the previous stable upstream tag to the
   failed one, so it can see how upstream changed its own release process. It may
-  update `.github/workflows/release.yml`, `scripts/`, and `README.md`; when the
+  update `.github/workflows/build-artifacts.yml`,
+  `.github/workflows/release.yml`, `scripts/`, and `README.md`; when the
   cause is inside upstream's packaging logic, it may also add or adjust a patch
   in `patches/`. It cannot touch other workflows, and `upstream-base.txt` must
   stay at the tag being built.
@@ -204,3 +258,5 @@ vp run build:desktop
 ```
 
 The release workflow is the reference for each target's exact commands.
+`.github/workflows/build-artifacts.yml` holds those jobs, and `release.yml` and
+`pr-preview.yml` both call it.
