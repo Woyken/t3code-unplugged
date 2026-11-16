@@ -1,0 +1,290 @@
+name: PR preview build
+
+# Builds one pull request's patched app and publishes it as a prerelease so it
+# can be installed and reviewed without cutting a release.
+#
+# A preview is `<upstream-base.txt from the PR> + the PR's patch series`. That is
+# what a patch-refresh PR actually changes, and a workflow/scripts-only PR is
+# tested with its own build recipe.
+#
+# Trigger: apply the `preview:build` label, or run this workflow manually with a
+# PR number. Add `preview:linux`, `preview:windows`, `preview:android`,
+# `preview:mac`, or `preview:web` to choose targets (default
+# `linux,windows,android`); `preview:all` builds every target.
+#
+# The preview release is tagged `pr-<n>-preview`. Deliberately not
+# `v<tag>-unplugged.*`: Release's resolver scans that namespace and would treat
+# a preview tag as an already-published release. `prerelease: true` keeps it out
+# of `/releases/latest`, which is the feed the desktop updater reads.
+#
+# Only same-repository branches are built. Fork PRs do not receive a write token
+# on `pull_request`, and publishing needs one.
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number"
+        required: true
+        type: string
+      targets:
+        description: "Comma list of linux, windows, android, mac, web. windows implies linux."
+        required: false
+        default: "linux,windows,android"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      eligible: ${{ steps.pr.outputs.eligible }}
+      number: ${{ steps.pr.outputs.number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      title: ${{ steps.pr.outputs.title }}
+      upstream_tag: ${{ steps.pr.outputs.upstream_tag }}
+      version: ${{ steps.pr.outputs.version }}
+      targets: ${{ steps.pr.outputs.targets }}
+    steps:
+      - name: Resolve pull request and version
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PR: ${{ inputs.pr }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+
+          eligible=true
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            number="$(jq -r '.pull_request.number' "${GITHUB_EVENT_PATH}")"
+            head_sha="$(jq -r '.pull_request.head.sha' "${GITHUB_EVENT_PATH}")"
+            title="$(jq -r '.pull_request.title' "${GITHUB_EVENT_PATH}")"
+            head_repo="$(jq -r '.pull_request.head.repo.full_name' "${GITHUB_EVENT_PATH}")"
+            labels="$(jq -r '.pull_request.labels[].name' "${GITHUB_EVENT_PATH}")"
+            fork=false
+            if [[ "${head_repo}" != "${GH_REPO}" ]]; then
+              fork=true
+            fi
+
+            # Any preview label opts in; a different label on the same PR must
+            # not start a build.
+            if ! grep -qE '^preview(:|$)' <<< "${labels}"; then
+              eligible=false
+            fi
+            if grep -qx 'preview:all' <<< "${labels}"; then
+              targets="linux,windows,android,mac,web"
+            else
+              targets="$(printf '%s\n' "${labels}" \
+                | sed -n 's/^preview:\(linux\|windows\|android\|mac\|web\)$/\1/p' \
+                | paste -sd, -)"
+            fi
+            targets="${targets:-linux,windows,android}"
+          else
+            if [[ -z "${INPUT_PR:-}" ]]; then
+              echo "::error::Set the 'pr' input to a pull request number."
+              exit 1
+            fi
+            if ! number="$(gh pr view "${INPUT_PR}" --json number --jq '.number')"; then
+              echo "::error::PR #${INPUT_PR} was not found."
+              exit 1
+            fi
+            head_sha="$(gh pr view "${number}" --json headRefOid --jq '.headRefOid')"
+            title="$(gh pr view "${number}" --json title --jq '.title')"
+            fork="$(gh pr view "${number}" --json isCrossRepository --jq '.isCrossRepository')"
+            targets="${INPUT_TARGETS:-linux,windows,android}"
+          fi
+
+          # Outputs are line-based; keep a stray newline in a title from
+          # corrupting them.
+          title="$(printf '%s' "${title}" | tr '\n' ' ')"
+
+          if [[ "${fork}" == "true" ]]; then
+            # A preview publishes a release, so it needs a branch in this repo.
+            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+              echo "::notice::Skipping PR #${number}: fork PRs are not previewed."
+              eligible=false
+            else
+              echo "::error::PR #${number} comes from a fork; push the branch here to preview it."
+              exit 1
+            fi
+          fi
+
+          if [[ "${eligible}" != "true" ]]; then
+            if [[ "${fork}" != "true" ]]; then
+              echo "::notice::PR #${number} has no preview label; nothing to build."
+            fi
+            {
+              echo "eligible=false"
+              echo "number=${number}"
+              echo "head_sha=${head_sha}"
+              echo "title=${title}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The PR records its own patch base, so a patch-refresh PR previews the
+          # tag its series actually targets.
+          upstream_tag="$(
+            gh api "repos/${GH_REPO}/contents/upstream-base.txt?ref=${head_sha}" \
+              --jq '.content' | tr -d '\n' | base64 -d | tr -d '[:space:]'
+          )" || {
+            echo "::error::PR #${number} has no readable upstream-base.txt."
+            exit 1
+          }
+          if [[ ! "${upstream_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::upstream-base.txt contains '${upstream_tag}', not a stable tag like v1.2.3."
+            exit 1
+          fi
+
+          # Upstream's desktop app treats `-preview.YYYYMMDD.N` as a preview build
+          # with no update feed, so a preview never offers or accepts a stable
+          # update while it is being reviewed.
+          version="${upstream_tag#v}-preview.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+
+          echo "upstream_tag=${upstream_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "Preview ${version} for PR #${number} (targets: ${targets})."
+
+  build:
+    name: Build preview
+    needs: resolve
+    if: needs.resolve.outputs.eligible == 'true'
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      upstream_tag: ${{ needs.resolve.outputs.upstream_tag }}
+      version: ${{ needs.resolve.outputs.version }}
+      source_ref: ${{ needs.resolve.outputs.head_sha }}
+      targets: ${{ needs.resolve.outputs.targets }}
+      cache: true
+
+  publish:
+    name: Publish preview
+    needs: [resolve, build]
+    if: needs.resolve.outputs.eligible == 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # Demote the token for everything except this job: the build ran PR code.
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ needs.resolve.outputs.number }}
+      PR_TITLE: ${{ needs.resolve.outputs.title }}
+      HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+      UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: pr-${{ needs.resolve.outputs.number }}-preview
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          ls -lh
+          sha256sum * > SHA256SUMS
+
+      - name: Replace previous preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One preview per PR: the tag stays stable so the PR comment link keeps
+          # working, and assets from an older commit do not linger next to it.
+          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > preview-notes.md <<EOF
+          ## Preview build for PR #${PR}
+
+          ${PR_TITLE}
+
+          - Commit: \`${HEAD_SHA}\`
+          - Built from [pingdotgg/t3code ${UPSTREAM_TAG}](https://github.com/pingdotgg/t3code/tree/${UPSTREAM_TAG}) plus this pull request's unplugged patch series
+          - Version: \`${VERSION}\`
+
+          This is a throwaway preview, not a release. It is published as a
+          prerelease, so the update feed never offers it, and it is deleted when
+          the pull request closes. Windows builds are unsigned (SmartScreen may
+          warn) and the Android APK is debug-signed.
+          EOF
+
+      - name: Create preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          # Tag the commit that was actually built, not the pull_request merge
+          # ref, so the tag always points at a branch commit.
+          target_commitish: ${{ needs.resolve.outputs.head_sha }}
+          name: "PR #${{ needs.resolve.outputs.number }} preview (${{ needs.resolve.outputs.version }})"
+          body_path: preview-notes.md
+          files: artifacts/*
+          prerelease: true
+          make_latest: false
+
+      - name: Comment download links
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${GITHUB_SERVER_URL}/${GH_REPO}/releases/download/${TAG}"
+
+          {
+            echo "<!-- pr-preview-build -->"
+            echo "### Preview build \`${VERSION}\`"
+            echo
+            echo "\`${HEAD_SHA:0:7}\` built from \`${UPSTREAM_TAG}\` plus this PR's patch series. Not a release: a prerelease tagged \`${TAG}\`, ignored by the update feed and deleted when the PR closes."
+            echo
+            for file in artifacts/*; do
+              name="$(basename "${file}")"
+              case "${name}" in
+                SHA256SUMS) continue ;;
+                latest.yml|*.blockmap) continue ;;
+                *.exe) label="Windows installer (unsigned — SmartScreen warns)" ;;
+                *.apk) label="Android APK (debug-signed; install manually)" ;;
+                *linux-x64.tar.gz) label="Linux CLI x64" ;;
+                *linux-arm64.tar.gz) label="Linux CLI arm64" ;;
+                t3code-web-*.tar.gz) label="Web client (static assets; needs a t3 server to pair with)" ;;
+                *) label="Artifact" ;;
+              esac
+              echo "- ${label}: [\`${name}\`](${base}/${name})"
+            done
+            echo "- Checksums: [\`SHA256SUMS\`](${base}/SHA256SUMS)"
+          } > comment.md
+
+          existing="$(
+            gh api "repos/${GH_REPO}/issues/${PR}/comments" --paginate \
+              --jq '.[] | select(.body | contains("<!-- pr-preview-build -->")) | .id' \
+              | head -n 1
+          )"
+          if [[ -n "${existing}" ]]; then
+            gh api --method PATCH "repos/${GH_REPO}/issues/comments/${existing}" \
+              -F "body=@comment.md" >/dev/null
+            echo "Updated the preview comment on PR #${PR}."
+          else
+            gh pr comment "${PR}" --body-file comment.md
+            echo "Commented the preview links on PR #${PR}."
+          fi

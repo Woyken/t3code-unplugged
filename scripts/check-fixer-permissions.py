@@ -49,6 +49,7 @@ REQUIRED = {
         "git diff",
         "git diff -- patches",
         "git diff -- upstream-base.txt",
+        "git checkout -- .github/workflows/build-artifacts.yml",
         "git checkout -- .github/workflows/release.yml",
         "git checkout -- scripts/",
         "git checkout -- README.md",

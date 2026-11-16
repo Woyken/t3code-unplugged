@@ -1,0 +1,624 @@
+name: Build artifacts
+
+# The one place a release or preview artifact is built. Release and PR preview
+# builds call this with different versions and target sets, so an upstream build
+# change is made once instead of in two workflows that drift apart.
+#
+# A caller only decides what to build, never how: `upstream_tag` plus this
+# repository's `patches/` and `scripts/` at `source_ref` are the whole input.
+
+on:
+  workflow_call:
+    inputs:
+      upstream_tag:
+        description: "Upstream tag to build, for example v0.1.8"
+        required: true
+        type: string
+      version:
+        description: "Version written into every artifact, for example 0.1.8-unplugged.1"
+        required: true
+        type: string
+      source_ref:
+        description: "Commit of this repository whose patches/ and scripts/ are used"
+        required: true
+        type: string
+      targets:
+        description: "Comma list of linux, windows, android, mac, web. windows implies linux."
+        required: false
+        default: "linux,windows,android"
+        type: string
+      cache:
+        description: "Enable the vp install cache; releases pass false for a cold, reproducible build"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      linux: ${{ steps.plan.outputs.linux }}
+      windows: ${{ steps.plan.outputs.windows }}
+      android: ${{ steps.plan.outputs.android }}
+      mac: ${{ steps.plan.outputs.mac }}
+      web: ${{ steps.plan.outputs.web }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      - name: Resolve targets
+        id: plan
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+
+          list="$(printf '%s' "${TARGETS}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          linux=false
+          windows=false
+          android=false
+          mac=false
+          web=false
+
+          IFS=',' read -ra items <<< "${list}"
+          for item in "${items[@]}"; do
+            case "${item}" in
+              "") ;;
+              linux) linux=true ;;
+              windows) windows=true ;;
+              android) android=true ;;
+              mac) mac=true ;;
+              web) web=true ;;
+              *)
+                echo "::error::Unknown target '${item}'. Use linux, windows, android, mac, or web."
+                exit 1
+                ;;
+            esac
+          done
+
+          if [[ "${linux}" == false && "${windows}" == false && "${android}" == false && "${mac}" == false && "${web}" == false ]]; then
+            echo "::error::No targets selected."
+            exit 1
+          fi
+
+          # The Windows installer embeds the Linux x64 CLI as its WSL sidecar,
+          # so that archive has to exist even when only Windows was requested.
+          if [[ "${windows}" == true ]]; then
+            linux=true
+          fi
+
+          any=false
+          if [[ "${linux}" == true || "${windows}" == true || "${android}" == true || "${mac}" == true || "${web}" == true ]]; then
+            any=true
+          fi
+
+          {
+            echo "linux=${linux}"
+            echo "windows=${windows}"
+            echo "android=${android}"
+            echo "mac=${mac}"
+            echo "web=${web}"
+            echo "any=${any}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Targets: linux=${linux} windows=${windows} android=${android} mac=${mac} web=${web}"
+
+  preflight:
+    name: Verify patch series
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        run: bash scripts/apply-patches.sh upstream
+
+      - name: Verify unplugged strip
+        run: bash scripts/verify-strip.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      # Catching this before any platform build keeps a patch that references a
+      # symbol upstream removed from ever producing an artifact.
+      - name: Typecheck patched packages
+        run: bash scripts/typecheck-patches.sh upstream
+
+  linux-cli:
+    name: Linux CLI ${{ matrix.arch }}
+    needs: [plan, preflight]
+    if: needs.plan.outputs.linux == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Build server bundle and web client
+        working-directory: upstream
+        run: vp run --filter t3 build
+
+      - name: Pin patched dependencies for the CLI archive
+        working-directory: upstream
+        shell: bash
+        run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
+
+      # Build natively on the matching runner. Upstream's cross-target list
+      # excludes linux-arm64 (its SEA output must load on 16/64 KiB page
+      # kernels), and a native build works for both architectures. Let setup-vp
+      # pick the package.json Node version; overriding it breaks the native check.
+      - name: Build CLI executable
+        working-directory: upstream
+        run: node apps/server/scripts/cli.ts build-exe
+
+      - name: Build resource monitor
+        working-directory: upstream
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+
+      - name: Stage resource monitor
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/cli-resource-monitor/linux-${{ matrix.arch }}"
+          mkdir -p "$stage"
+          cp upstream/native/resource-monitor/target/release/t3-resource-monitor "$stage/"
+
+      - name: Build CLI archive
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          time timeout -k 30 600 node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch ${{ matrix.arch }} \
+            --version "${{ inputs.version }}" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+          ls -lh release-cli/
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          path: upstream/release-cli/*
+          if-no-files-found: error
+
+      # Upstream's smoke script has no cap on the first process it launches and
+      # Effect's SIGTERM handling can keep it alive past `timeout`. Do the same
+      # checks here with hard kill deadlines. This gate blocks publishing: a
+      # packaged CLI that does not answer requests is never publishable, and a
+      # failure goes to the release fixer as build drift.
+      - name: Smoke-test CLI archive
+        working-directory: upstream
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -uo pipefail
+          dir="$RUNNER_TEMP/cli-smoke"
+          rm -rf "$dir"
+          mkdir -p "$dir/home"
+          tar -xzf release-cli/*.tar.gz -C "$dir"
+          root="$(find "$dir" -maxdepth 1 -mindepth 1 -type d -name 't3-*' | head -n 1)"
+          if [[ -z "$root" ]]; then
+            echo "::error::The CLI archive did not contain a t3-* directory."
+            exit 1
+          fi
+          echo "archive root: $root"
+
+          pid=""
+          cleanup() {
+            if [[ -n "${pid}" ]]; then
+              kill -TERM "$pid" 2>/dev/null || true
+              sleep 3
+              kill -KILL "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          version_out="$(timeout -k 10 60 env HOME="$dir/home" T3CODE_HOME="$dir/home" "$root/t3" --version 2>&1)"
+          version_status=$?
+          echo "t3 --version (exit $version_status): $version_out"
+          if [[ $version_status -ne 0 || "$version_out" != *"${{ inputs.version }}"* ]]; then
+            echo "::error::t3 --version failed or printed the wrong version."
+            exit 1
+          fi
+
+          port=47811
+          env HOME="$dir/home" T3CODE_HOME="$dir/home" "$root/t3" serve \
+            --host 127.0.0.1 --port "$port" --no-browser >"$dir/server.log" 2>&1 &
+          pid=$!
+          ready=0
+          exited=0
+          for _ in $(seq 1 60); do
+            if curl --max-time 2 -fsS "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              exited=1
+              break
+            fi
+            sleep 1
+          done
+
+          cleanup
+          pid=""
+          tail -n 60 "$dir/server.log" || true
+          if [[ $ready -ne 1 ]]; then
+            if [[ $exited -eq 1 ]]; then
+              echo "::error::t3 serve exited before answering on port $port."
+            else
+              echo "::error::t3 serve did not answer on port $port within 60s."
+            fi
+            exit 1
+          fi
+          echo "CLI archive smoke test passed."
+
+  windows-desktop:
+    name: Windows desktop
+    needs: [plan, preflight, linux-cli]
+    if: needs.plan.outputs.windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Download Linux CLI archive for WSL
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-linux-x64
+          path: upstream/release-cli
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Pin patched dependencies for the desktop sidecar
+        working-directory: upstream
+        shell: bash
+        run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
+
+      - name: Build Windows installer
+        working-directory: upstream
+        shell: bash
+        env:
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          wsl_archive="$(ls release-cli/t3-*.tar.gz | head -n 1)"
+          node scripts/build-desktop-artifact.ts \
+            --platform win \
+            --target nsis \
+            --arch x64 \
+            --build-version "${{ inputs.version }}" \
+            --output-dir release \
+            --wsl-runtime "$wsl_archive"
+
+      - name: Collect installer and updater metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          installer="$(ls upstream/release/*.exe | head -n 1)"
+          test -n "$installer"
+          manifest="upstream/release/latest.yml"
+          blockmap="${installer}.blockmap"
+          test -f "$manifest"
+          test -f "$blockmap"
+          # electron-updater downloads the URL in latest.yml verbatim, so the
+          # installer has to keep the name electron-builder gave it.
+          grep -Fq "url: $(basename "$installer")" "$manifest"
+          cp "$installer" artifact/
+          cp "$manifest" artifact/
+          cp "$blockmap" artifact/
+          ls -lh artifact/
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: artifact/*
+          if-no-files-found: error
+
+  macos-desktop:
+    name: macOS desktop
+    needs: [plan, preflight]
+    if: needs.plan.outputs.mac == 'true'
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Pin patched dependencies for the desktop sidecar
+        working-directory: upstream
+        shell: bash
+        run: bash ../scripts/pin-patched-dependencies.sh pnpm-workspace.yaml
+
+      - name: Build macOS installer
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Unsigned macOS builds cannot auto-update: Squirrel.Mac requires a
+          # signed app. Remove GITHUB_REPOSITORY for this build so
+          # electron-builder writes no feed manifest, and the app reports
+          # updates as unavailable instead of offering an install that cannot
+          # complete.
+          env -u GITHUB_REPOSITORY node scripts/build-desktop-artifact.ts \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ inputs.version }}" \
+            --output-dir release
+
+      - name: Collect installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          dmg="$(ls upstream/release/*.dmg | head -n 1)"
+          test -n "$dmg"
+          if [[ -f upstream/release/latest-mac.yml ]]; then
+            echo "::error::Unsigned macOS build produced an updater manifest."
+            exit 1
+          fi
+          cp "$dmg" artifact/
+          ls -lh artifact/
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: artifact/*
+          if-no-files-found: error
+
+  android-apk:
+    name: Android APK
+    needs: [plan, preflight]
+    if: needs.plan.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      APP_VARIANT: production
+      EXPO_NO_GIT_STATUS: "1"
+      EXPO_NO_DOTENV: "1"
+      CI: "1"
+      GRADLE_OPTS: "-Xmx6g -Dorg.gradle.daemon=false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/mobile...
+
+      - name: Generate Android project
+        working-directory: upstream/apps/mobile
+        run: node node_modules/expo/bin/cli prebuild --clean --platform android --no-install
+
+      - name: Build release APK
+        working-directory: upstream/apps/mobile/android
+        run: |
+          chmod +x gradlew
+          for attempt in 1 2 3; do
+            echo "Gradle build attempt $attempt"
+            if ./gradlew :app:assembleRelease --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 30
+          done
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          apk="$(find upstream/apps/mobile/android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          test -n "$apk"
+          cp "$apk" "artifact/t3code-unplugged-${{ inputs.version }}-android.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: artifact/*.apk
+          if-no-files-found: error
+
+  # The web client is also embedded in the CLI archive; this target exists so a
+  # UI-only change can be looked at without waiting for a packaged server. The
+  # tarball is static assets, not a hosted app: it still needs a t3 server to
+  # pair with.
+  web:
+    name: Web client
+    needs: [plan, preflight]
+    if: needs.plan.outputs.web == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Apply unplugged patch series
+        shell: bash
+        run: bash scripts/apply-patches.sh upstream
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: upstream/package.json
+          cache: ${{ inputs.cache }}
+          run-install: false
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: vp install --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        working-directory: upstream
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Build web client
+        working-directory: upstream
+        run: vp run --filter @t3tools/web build
+
+      - name: Package web client
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d apps/web/dist
+          mkdir -p release-web
+          tar -czf "release-web/t3code-web-${{ inputs.version }}.tar.gz" -C apps/web dist
+          ls -lh release-web/
+
+      - name: Upload web client
+        uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: upstream/release-web/*
+          if-no-files-found: error
