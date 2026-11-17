@@ -68,6 +68,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # One writer for every output, so a value cannot be set on one path and
+          # silently missing on another.
+          out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
           eligible=true
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             number="$(jq -r '.pull_request.number' "${GITHUB_EVENT_PATH}")"
@@ -111,6 +115,9 @@ jobs:
           # Outputs are line-based; keep a stray newline in a title from
           # corrupting them.
           title="$(printf '%s' "${title}" | tr '\n' ' ')"
+          out number "${number}"
+          out head_sha "${head_sha}"
+          out title "${title}"
 
           if [[ "${fork}" == "true" ]]; then
             # A preview publishes a release, so it needs a branch in this repo.
@@ -127,12 +134,7 @@ jobs:
             if [[ "${fork}" != "true" ]]; then
               echo "::notice::PR #${number} has no preview label; nothing to build."
             fi
-            {
-              echo "eligible=false"
-              echo "number=${number}"
-              echo "head_sha=${head_sha}"
-              echo "title=${title}"
-            } >> "$GITHUB_OUTPUT"
+            out eligible false
             exit 0
           fi
 
@@ -155,10 +157,10 @@ jobs:
           # update while it is being reviewed.
           version="${upstream_tag#v}-preview.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
 
-          echo "upstream_tag=${upstream_tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
-          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          out upstream_tag "${upstream_tag}"
+          out version "${version}"
+          out targets "${targets}"
+          out eligible true
           echo "Preview ${version} for PR #${number} (targets: ${targets})."
 
   build:
@@ -193,6 +195,19 @@ jobs:
       VERSION: ${{ needs.resolve.outputs.version }}
       TAG: pr-${{ needs.resolve.outputs.number }}-preview
     steps:
+      - name: Check resolved values
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A missing output used to publish a release tagged `pr--preview`, so
+          # refuse to run instead of guessing.
+          for name in PR HEAD_SHA VERSION UPSTREAM_TAG; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Resolve did not provide ${name}; refusing to publish."
+              exit 1
+            fi
+          done
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
