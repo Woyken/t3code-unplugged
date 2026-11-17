@@ -534,7 +534,7 @@ jobs:
           cache: ${{ inputs.cache }}
           run-install: false
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
