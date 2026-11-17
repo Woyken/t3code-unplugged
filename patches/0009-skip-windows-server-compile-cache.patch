@@ -1,9 +1,9 @@
 diff --git a/scripts/prepare-server-compile-cache.cjs b/scripts/prepare-server-compile-cache.cjs
-index 0c5890c..288e846 100644
+index b0949586..7de0e2e2 100644
 --- a/scripts/prepare-server-compile-cache.cjs
 +++ b/scripts/prepare-server-compile-cache.cjs
-@@ -10,6 +10,14 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) =>
-     console.log(`[server-compile-cache] Skipping unsupported target ${electronPlatformName}`);
+@@ -15,6 +15,14 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) =>
+     console.log("[server-compile-cache] Skipping untrusted bundle");
      return;
    }
 +  // Upstream cross-builds Windows releases on Linux, where afterPack cannot run

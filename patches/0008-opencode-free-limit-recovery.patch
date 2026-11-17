@@ -1,8 +1,8 @@
 diff --git a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
-index 71fb1d70..70cfba85 100644
+index 1cc1190d..1c1968a7 100644
 --- a/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
 +++ b/packages/provider-opencode/src/server/v2/OpenCode2Client.ts
-@@ -77,6 +77,19 @@ const SILENT_STREAM_TIMEOUT = "45 seconds";
+@@ -134,6 +134,19 @@ const SILENT_STREAM_TIMEOUT = "45 seconds";
  const SUBSCRIPTION_TIMEOUT = "10 seconds";
  
  const decodeEvent = Schema.decodeUnknownResult(Schema.fromJsonString(OpenCodeEvent));
@@ -22,7 +22,7 @@ index 71fb1d70..70cfba85 100644
  const decodeEnvelope = Schema.decodeUnknownOption(
    Schema.fromJsonString(
      Schema.Struct({
-@@ -129,9 +142,23 @@ const readEvents = HttpClient.get("/api/event", {
+@@ -190,9 +203,23 @@ const readEvents = HttpClient.HttpClient.pipe(
        Stream.pipeThroughChannel(Sse.decode()),
        Stream.filterMapEffect((frame) => {
          const decoded = decodeEvent(frame.data);
@@ -50,10 +50,18 @@ index 71fb1d70..70cfba85 100644
      ),
    ),
 diff --git a/packages/provider-opencode/src/server/v2/adapter.ts b/packages/provider-opencode/src/server/v2/adapter.ts
-index 81871b4b..da3c087c 100644
+index 189cc3cd..b6e01608 100644
 --- a/packages/provider-opencode/src/server/v2/adapter.ts
 +++ b/packages/provider-opencode/src/server/v2/adapter.ts
-@@ -2159,12 +2159,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
+@@ -608,6 +608,7 @@ const isUsageLimit = (error: {
+ }) =>
+   (error.type === "provider.quota" && error.status !== 402) ||
+   error.type === "provider.rate-limit" ||
++  error.type === "provider.free-limit" ||
+   claudeUsageLimit(error.message) !== undefined;
+ 
+ const INTERRUPT_TIMEOUT = 10_000;
+@@ -2894,13 +2895,27 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
            return yield* endExecution(state, turn, { status: "interrupted" });
          case "session.execution.failed": {
            const { type, message, status, response } = event.data.error;
@@ -63,21 +71,15 @@ index 81871b4b..da3c087c 100644
 +          const retryAfterMs = (
 +            event.data.error as typeof event.data.error & { readonly retryAfterMs?: number }
 +          ).retryAfterMs;
-           // OpenCode types an empty balance as provider.quota too, but it answers
-           // that with HTTP 402 and it never resets. Usage windows and budgets are 429.
-           const claudeLimit = claudeUsageLimit(message);
-           const usageLimit =
-             (type === "provider.quota" && status !== 402) ||
-             type === "provider.rate-limit" ||
-+            type === "provider.free-limit" ||
-             claudeLimit !== undefined;
++          const usageLimit = isUsageLimit(event.data.error);
            return yield* endExecution(state, turn, {
              status: "failed",
-@@ -2172,7 +2179,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
+             failure: makeProviderFailure({
                message: readableProviderErrorMessage(message, status, response?.body),
                code: type,
-               class: usageLimit ? "usage_limit" : "provider_error",
--              resetAt: claudeLimit?.resetAt ?? null,
+-              class: isUsageLimit(event.data.error) ? "usage_limit" : "provider_error",
+-              resetAt: claudeUsageLimit(message)?.resetAt ?? null,
++              class: usageLimit ? "usage_limit" : "provider_error",
 +              // The free tier reports its reset only as a delay, and T3's
 +              // usage-limit recovery needs an absolute time to resume at.
 +              resetAt:
@@ -85,7 +87,7 @@ index 81871b4b..da3c087c 100644
 +                  ? DateTime.formatIso(
 +                      DateTime.add(yield* DateTime.now, { milliseconds: retryAfterMs }),
 +                    )
-+                  : (claudeLimit?.resetAt ?? null),
++                  : (claudeUsageLimit(message)?.resetAt ?? null),
              }),
            });
          }
