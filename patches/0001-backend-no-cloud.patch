@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
-index 15a3a932..e8377b80 100644
+index 995b207e..7861e7ed 100644
 --- a/apps/server/src/binCli.ts
 +++ b/apps/server/src/binCli.ts
 @@ -5,7 +5,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -19,7 +19,7 @@ index 15a3a932..e8377b80 100644
  import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
  import { sharedServerCommandFlags } from "./cli/config.ts";
  import { projectCommand } from "./cli/project.ts";
-@@ -32,35 +31,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+@@ -39,35 +38,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
  import { themeCommand } from "./cli/theme.ts";
  import { traceCommand } from "./cli/trace.ts";
  import { triageCommand } from "./cli/triage.ts";
@@ -57,7 +57,7 @@ index 15a3a932..e8377b80 100644
    Command.make("t3", { ...sharedServerCommandFlags }).pipe(
      Command.withDescription(
        "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
-@@ -99,7 +74,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
+@@ -113,7 +88,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
        doctorCommand,
        policyCommand,
        triageCommand,
@@ -65,192 +65,17 @@ index 15a3a932..e8377b80 100644
      ]),
    );
  
-diff --git a/apps/server/src/cloud/config.ts b/apps/server/src/cloud/config.ts
-index 5dac9e2d..0e4de119 100644
---- a/apps/server/src/cloud/config.ts
-+++ b/apps/server/src/cloud/config.ts
-@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
- import * as Schema from "effect/Schema";
- 
- import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-+import { hasCloudPublicConfig } from "./publicConfig.ts";
- 
- export const CLOUD_MINT_PUBLIC_KEY = "cloud-mint-ed25519-public-key";
- export const CLOUD_ENDPOINT_RUNTIME_CONFIG = "cloud-endpoint-runtime-config";
-@@ -52,6 +53,9 @@ export const readAgentActivityPublishingActive: (
-   secrets: ServerSecretStore.ServerSecretStore["Service"],
- ) => Effect.Effect<boolean> = Effect.fn("config.readAgentActivityPublishingActive")(
-   function* (secrets: ServerSecretStore.ServerSecretStore["Service"]) {
-+    // Unplugged build: relay publishing is removed, so the descriptor must not
-+    // advertise a capability the publisher cannot use.
-+    if (!hasCloudPublicConfig) return false;
-     const readSecretString = (name: string) =>
-       secrets
-         .get(name)
-diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
-index 15594f11..e3ac8f4b 100644
---- a/apps/server/src/cloud/publicConfig.ts
-+++ b/apps/server/src/cloud/publicConfig.ts
-@@ -4,7 +4,6 @@ import {
-   DEFAULT_HOSTED_APP_URL,
- } from "@t3tools/shared/connectAuth";
- import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
--import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
- import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
- import * as Config from "effect/Config";
- import * as ConfigProvider from "effect/ConfigProvider";
-@@ -41,15 +40,6 @@ function readBuildTimeValue(value: string | undefined): string {
-   return typeof value === "undefined" ? "" : value.trim();
- }
- 
--function normalizeSecureUrl(value: string): string | null {
--  try {
--    const url = new URL(value);
--    return url.protocol === "https:" ? url.toString() : null;
--  } catch {
--    return null;
--  }
--}
--
- const buildTimeRelayUrl =
-   typeof __T3CODE_BUILD_RELAY_URL__ === "undefined"
-     ? ""
-@@ -83,21 +73,11 @@ const buildTimeRelayClientTracing = {
- } as const;
- 
- export function resolveRelayClientTracingConfig(
--  env: Readonly<Record<string, string | undefined>> = process.env,
--  fallback = buildTimeRelayClientTracing,
-+  _env: Readonly<Record<string, string | undefined>> = process.env,
-+  _fallback = buildTimeRelayClientTracing,
- ) {
--  if (!isRelayTracingEnabled(env)) {
--    return null;
--  }
--
--  const tracesUrl = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() || fallback.tracesUrl;
--  const tracesDataset =
--    env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() || fallback.tracesDataset;
--  const tracesToken = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() || fallback.tracesToken;
--  const normalizedTracesUrl = normalizeSecureUrl(tracesUrl);
--  return normalizedTracesUrl && tracesDataset && tracesToken
--    ? { tracesUrl: normalizedTracesUrl, tracesDataset, tracesToken }
--    : null;
-+  // Unplugged build: relay tracing is removed.
-+  return null;
- }
- 
- export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
-@@ -204,8 +184,7 @@ export function makeCloudCliOAuthConfig({
- 
- export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
- 
--export const hasCloudPublicConfig = Boolean(
--  (normalizeSecureRelayUrl(process.env.T3CODE_RELAY_URL ?? "") ?? buildTimeRelayUrl) &&
--  (process.env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() || buildTimeClerkPublishableKey) &&
--  (process.env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || buildTimeClerkCliOAuthClientId),
--);
-+// Unplugged build: T3 Connect is removed, so nothing cloud-gated may turn on.
-+// The explicit `boolean` keeps callers from treating the rest of a function as
-+// unreachable.
-+export const hasCloudPublicConfig: boolean = false;
-diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
-index 6a235911..82aaf941 100644
---- a/apps/server/src/relay/AgentAwarenessRelay.ts
-+++ b/apps/server/src/relay/AgentAwarenessRelay.ts
-@@ -47,6 +47,7 @@ import {
-   RELAY_URL_SECRET,
- } from "../cloud/config.ts";
- import { EnvironmentSigningKey } from "../cloud/environmentKeys.ts";
-+import { hasCloudPublicConfig } from "../cloud/publicConfig.ts";
- import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
- import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
- import * as ProjectService from "../project/ProjectService.ts";
-@@ -394,6 +395,9 @@ export const make = Effect.gen(function* () {
-       );
- 
-   const readRelayConfig = Effect.gen(function* () {
-+    // Unplugged build: never publish to a T3 Connect relay, even when an old
-+    // link's credentials are still in the secret store.
-+    if (!hasCloudPublicConfig) return null;
-     const [url, issuer, environmentCredential] = yield* Effect.all([
-       readSecretString(RELAY_URL_SECRET),
-       readSecretString(RELAY_ISSUER_SECRET),
-@@ -404,9 +408,11 @@ export const make = Effect.gen(function* () {
-       : null;
-   });
- 
--  const readPublishAgentActivityEnabled = readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
--    Effect.map(isAgentActivityPublishingEnabledValue),
--  );
-+  const readPublishAgentActivityEnabled = hasCloudPublicConfig
-+    ? readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
-+        Effect.map(isAgentActivityPublishingEnabledValue),
-+      )
-+    : Effect.succeed(false);
- 
-   const makeRelayClient = (relayConfig: {
-     readonly url: string;
-diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 395afcf5..c54b4392 100644
---- a/apps/server/src/server.ts
-+++ b/apps/server/src/server.ts
-@@ -958,6 +958,13 @@ const layerMakeServer = Layer.unwrap(
-     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
-       Effect.gen(function* () {
-         const cloudLink = yield* CloudLink.CloudLink;
-+        // Unplugged build: never reconcile or start a T3 Connect tunnel. The
-+        // startup sequence still waits for this gate, so signal it before
-+        // returning or command readiness (and every HTTP request) hangs.
-+        if (!hasCloudPublicConfig) {
-+          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
-+          return;
-+        }
-         // CloudLink unlinks on startup when the policy turns Connect off; nothing to restore.
-         if (!ManagedLimits.allowsConnect(yield* ManagedPolicy.ManagedPolicy)) {
-           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
-diff --git a/apps/server/src/cloud/relayTracing.test.ts b/apps/server/src/cloud/relayTracing.test.ts
-index 34fcaa74..e987f7f4 100644
---- a/apps/server/src/cloud/relayTracing.test.ts
-+++ b/apps/server/src/cloud/relayTracing.test.ts
-@@ -14,10 +14,11 @@ import { relayLayer } from "./relayTracing.ts";
- const tracesTo = (policy?: ManagedPolicyDocument) =>
-   Effect.service(RelayTracing.RelayClientTracer).pipe(
-     Effect.provide(
--      relayLayer(
--        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
--        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
--      ).pipe(
-+      relayLayer({
-+        serviceName: "t3code-server",
-+        runtime: "node",
-+        client: "environment-server",
-+      }).pipe(
-         Layer.provide(ManagedPolicy.layerTest(policy)),
-         Layer.provide(
-           ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
-@@ -30,9 +31,9 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
-     Effect.map(Option.isSome),
-   );
- 
--it.effect("a policy with telemetry off stops relay tracing to T3 Connect", () =>
-+it.effect("relay tracing to T3 Connect is removed in unplugged builds", () =>
-   Effect.gen(function* () {
--    assert.isTrue(yield* tracesTo());
-+    assert.isFalse(yield* tracesTo());
-     assert.isFalse(
-       yield* tracesTo({
-         schemaVersion: 1,
 diff --git a/apps/server/src/cli/connect.test.ts b/apps/server/src/cli/connect.test.ts
-index a524ab8d..f4b46d4b 100644
+index 4fbec456..6693d214 100644
 --- a/apps/server/src/cli/connect.test.ts
 +++ b/apps/server/src/cli/connect.test.ts
-@@ -1,25 +1,8 @@
+@@ -1,29 +1,9 @@
 -// @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises the Node HTTP boundary.
 -import * as NodeHttp from "node:http";
 -
 -import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 -import * as NodeServices from "@effect/platform-node/NodeServices";
+-import * as HostProcess from "@t3tools/shared/HostProcess";
 -import * as NetService from "@t3tools/shared/Net";
  import * as RelayClient from "@t3tools/shared/relayClient";
  import { assert, it } from "@effect/vitest";
@@ -264,21 +89,66 @@ index a524ab8d..f4b46d4b 100644
 -import { Command } from "effect/cli";
  
 -import { makeCli } from "../binCli.ts";
+-import { CLOUD_CLI_DESIRED_LINK_SECRET } from "../cloud/CliState.ts";
 -import {
 -  makePersistedServerRuntimeState,
 -  persistServerRuntimeState,
 -} from "../serverRuntimeState.ts";
  import { acquireRelayClientForLink } from "./connect.ts";
+-import { resolveHostCliCommand } from "./invocation.ts";
  
  const managedExecutable = {
-@@ -58,107 +41,3 @@ it.effect("does not install the relay client when the user declines the managed
+   status: "available",
+@@ -60,185 +40,3 @@ it.effect("does not install the relay client when the user declines the managed
+     assert.equal(installCalls, 0);
    }),
  );
- 
+-
 -it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))(
--  "t3 connect unlink",
+-  "t3 connect next steps",
 -  (it) => {
--    const runUnlink = (recordedPid: number, options?: { readonly portFreed?: boolean }) =>
+-    it.effect.each([
+-      { subcommand: "status", hint: "connect link" },
+-      { subcommand: "publish", hint: "connect login" },
+-    ])("t3 connect $subcommand names `t3 $hint` with --base-dir", ({ subcommand, hint }) =>
+-      Effect.gen(function* () {
+-        const fs = yield* FileSystem.FileSystem;
+-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-connect-hint-test-" });
+-
+-        yield* Command.runWith(makeCli({ cloudEnabled: true }), { version: "0.0.0" })([
+-          "connect",
+-          subcommand,
+-          "--base-dir",
+-          baseDir,
+-        ]);
+-
+-        const { command } = yield* resolveHostCliCommand(hint, ["--base-dir", baseDir]);
+-        assert.include((yield* TestConsole.logLines).join("\n"), `\`${command}\``);
+-      }).pipe(
+-        Effect.scoped,
+-        Effect.provideService(HostProcess.Environment, {}),
+-        Effect.provide(
+-          Layer.mergeAll(
+-            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+-            Layer.fresh(TestConsole.layer),
+-          ),
+-        ),
+-      ),
+-    );
+-  },
+-);
+-
+-it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))(
+-  "t3 connect unlink and status",
+-  (it) => {
+-    const runConnect = (
+-      recordedPid: number,
+-      options?: {
+-        readonly portFreed?: boolean;
+-        readonly command?: "unlink" | "status";
+-        readonly linkMode?: "managed" | "publish_only";
+-      },
+-    ) =>
 -      Effect.gen(function* () {
 -        const requests: Array<string> = [];
 -        const warnings: Array<string> = [];
@@ -313,10 +183,18 @@ index a524ab8d..f4b46d4b 100644
 -          path: `${baseDir}/userdata/server-runtime.json`,
 -          state: { ...state, pid: recordedPid },
 -        });
+-        if (options?.command === "status") {
+-          // Status asks the server for reachability only for a managed link.
+-          yield* fs.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
+-          yield* fs.writeFileString(
+-            `${baseDir}/userdata/secrets/${CLOUD_CLI_DESIRED_LINK_SECRET}.bin`,
+-            options.linkMode ?? "managed",
+-          );
+-        }
 -
 -        yield* Command.runWith(makeCli({ cloudEnabled: true }), { version: "0.0.0" })([
 -          "connect",
--          "unlink",
+-          options?.command ?? "unlink",
 -          "--base-dir",
 -          baseDir,
 -        ]).pipe(
@@ -345,7 +223,7 @@ index a524ab8d..f4b46d4b 100644
 -
 -    it.effect("does not tell the user to restart a server that is gone", () =>
 -      Effect.gen(function* () {
--        const { printed, warnings } = yield* runUnlink(deadPid, { portFreed: true });
+-        const { printed, warnings } = yield* runConnect(deadPid, { portFreed: true });
 -
 -        assert.include(printed, "T3 Connect is disabled locally.");
 -        assert.notInclude(warnings.join("\n"), "Restart that server");
@@ -354,7 +232,7 @@ index a524ab8d..f4b46d4b 100644
 -
 -    it.effect("warns that a server that is gone may have left its connector running", () =>
 -      Effect.gen(function* () {
--        const { warnings } = yield* runUnlink(deadPid, { portFreed: true });
+-        const { warnings } = yield* runConnect(deadPid, { portFreed: true });
 -
 -        assert.include(warnings.join("\n"), "its cloudflared process may still be running");
 -      }),
@@ -362,15 +240,43 @@ index a524ab8d..f4b46d4b 100644
 -
 -    it.effect("does not send a token to whatever took over a dead server's port", () =>
 -      Effect.gen(function* () {
--        const { requests } = yield* runUnlink(deadPid);
+-        const { requests } = yield* runConnect(deadPid);
 -
 -        assert.deepEqual(requests, []);
 -      }),
 -    );
 -
+-    it.effect("status does not send a token to whatever took over a dead server's port", () =>
+-      Effect.gen(function* () {
+-        const { requests } = yield* runConnect(deadPid, { command: "status" });
+-
+-        assert.deepEqual(requests, []);
+-      }),
+-    );
+-
+-    it.effect("status asks a running server to check reachability", () =>
+-      Effect.gen(function* () {
+-        const { requests } = yield* runConnect(process.pid, { command: "status" });
+-
+-        assert.deepEqual(requests, ["POST /api/connect/reachability"]);
+-      }),
+-    );
+-
+-    it.effect("status does not report a publish-only link as exposed", () =>
+-      Effect.gen(function* () {
+-        const { printed } = yield* runConnect(process.pid, {
+-          command: "status",
+-          linkMode: "publish_only",
+-        });
+-
+-        assert.include(printed, "Exposure: publish-only");
+-        assert.notInclude(printed, "Other devices can reach this machine");
+-      }),
+-    );
+-
 -    it.effect("asks a running server to stop its tunnel", () =>
 -      Effect.gen(function* () {
--        const { requests, printed, warnings } = yield* runUnlink(process.pid);
+-        const { requests, printed, warnings } = yield* runConnect(process.pid);
 -
 -        assert.deepEqual(requests, ["POST /api/connect/unlink"]);
 -        assert.include(printed, "T3 Connect is disabled locally.");
@@ -379,3 +285,179 @@ index a524ab8d..f4b46d4b 100644
 -    );
 -  },
 -);
+diff --git a/apps/server/src/cloud/config.ts b/apps/server/src/cloud/config.ts
+index 5dac9e2d..0e4de119 100644
+--- a/apps/server/src/cloud/config.ts
++++ b/apps/server/src/cloud/config.ts
+@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
+ import * as Schema from "effect/Schema";
+ 
+ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
++import { hasCloudPublicConfig } from "./publicConfig.ts";
+ 
+ export const CLOUD_MINT_PUBLIC_KEY = "cloud-mint-ed25519-public-key";
+ export const CLOUD_ENDPOINT_RUNTIME_CONFIG = "cloud-endpoint-runtime-config";
+@@ -52,6 +53,9 @@ export const readAgentActivityPublishingActive: (
+   secrets: ServerSecretStore.ServerSecretStore["Service"],
+ ) => Effect.Effect<boolean> = Effect.fn("config.readAgentActivityPublishingActive")(
+   function* (secrets: ServerSecretStore.ServerSecretStore["Service"]) {
++    // Unplugged build: relay publishing is removed, so the descriptor must not
++    // advertise a capability the publisher cannot use.
++    if (!hasCloudPublicConfig) return false;
+     const readSecretString = (name: string) =>
+       secrets
+         .get(name)
+diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
+index 85ffbbb0..8f13f8e5 100644
+--- a/apps/server/src/cloud/publicConfig.ts
++++ b/apps/server/src/cloud/publicConfig.ts
+@@ -4,7 +4,6 @@ import {
+   DEFAULT_HOSTED_APP_URL,
+ } from "@t3tools/shared/connectAuth";
+ import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
+-import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
+ import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
+ import * as Config from "effect/Config";
+ import * as ConfigProvider from "effect/ConfigProvider";
+@@ -42,15 +41,6 @@ function readBuildTimeValue(value: string | undefined): string {
+   return typeof value === "undefined" ? "" : value.trim();
+ }
+ 
+-function normalizeSecureUrl(value: string): string | null {
+-  try {
+-    const url = new URL(value);
+-    return url.protocol === "https:" ? url.toString() : null;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+ const buildTimeRelayUrl =
+   typeof __T3CODE_BUILD_RELAY_URL__ === "undefined"
+     ? ""
+@@ -84,21 +74,11 @@ const buildTimeRelayClientTracing = {
+ } as const;
+ 
+ export function resolveRelayClientTracingConfig(
+-  env: Readonly<Record<string, string | undefined>> = process.env,
+-  fallback = buildTimeRelayClientTracing,
++  _env: Readonly<Record<string, string | undefined>> = process.env,
++  _fallback = buildTimeRelayClientTracing,
+ ) {
+-  if (!isRelayTracingEnabled(env)) {
+-    return null;
+-  }
+-
+-  const tracesUrl = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() || fallback.tracesUrl;
+-  const tracesDataset =
+-    env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() || fallback.tracesDataset;
+-  const tracesToken = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() || fallback.tracesToken;
+-  const normalizedTracesUrl = normalizeSecureUrl(tracesUrl);
+-  return normalizedTracesUrl && tracesDataset && tracesToken
+-    ? { tracesUrl: normalizedTracesUrl, tracesDataset, tracesToken }
+-    : null;
++  // Unplugged build: relay tracing is removed.
++  return null;
+ }
+ 
+ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
+@@ -218,8 +198,7 @@ export function makeCloudCliOAuthConfig({
+ 
+ export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
+ 
+-export const hasCloudPublicConfig = Boolean(
+-  (normalizeSecureRelayUrl(process.env.T3CODE_RELAY_URL ?? "") ?? buildTimeRelayUrl) &&
+-  (process.env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() || buildTimeClerkPublishableKey) &&
+-  (process.env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || buildTimeClerkCliOAuthClientId),
+-);
++// Unplugged build: T3 Connect is removed, so nothing cloud-gated may turn on.
++// The explicit `boolean` keeps callers from treating the rest of a function as
++// unreachable.
++export const hasCloudPublicConfig: boolean = false;
+diff --git a/apps/server/src/cloud/relayTracing.test.ts b/apps/server/src/cloud/relayTracing.test.ts
+index 34fcaa74..e987f7f4 100644
+--- a/apps/server/src/cloud/relayTracing.test.ts
++++ b/apps/server/src/cloud/relayTracing.test.ts
+@@ -14,10 +14,11 @@ import { relayLayer } from "./relayTracing.ts";
+ const tracesTo = (policy?: ManagedPolicyDocument) =>
+   Effect.service(RelayTracing.RelayClientTracer).pipe(
+     Effect.provide(
+-      relayLayer(
+-        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
+-        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
+-      ).pipe(
++      relayLayer({
++        serviceName: "t3code-server",
++        runtime: "node",
++        client: "environment-server",
++      }).pipe(
+         Layer.provide(ManagedPolicy.layerTest(policy)),
+         Layer.provide(
+           ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
+@@ -30,9 +31,9 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
+     Effect.map(Option.isSome),
+   );
+ 
+-it.effect("a policy with telemetry off stops relay tracing to T3 Connect", () =>
++it.effect("relay tracing to T3 Connect is removed in unplugged builds", () =>
+   Effect.gen(function* () {
+-    assert.isTrue(yield* tracesTo());
++    assert.isFalse(yield* tracesTo());
+     assert.isFalse(
+       yield* tracesTo({
+         schemaVersion: 1,
+diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
+index ef2e3479..19f1c8c5 100644
+--- a/apps/server/src/relay/AgentAwarenessRelay.ts
++++ b/apps/server/src/relay/AgentAwarenessRelay.ts
+@@ -49,6 +49,7 @@ import {
+   RELAY_URL_SECRET,
+ } from "../cloud/config.ts";
+ import { EnvironmentSigningKey } from "../cloud/environmentKeys.ts";
++import { hasCloudPublicConfig } from "../cloud/publicConfig.ts";
+ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+ import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
+@@ -446,6 +447,9 @@ export const make = Effect.gen(function* () {
+       );
+ 
+   const readRelayConfig = Effect.gen(function* () {
++    // Unplugged build: never publish to a T3 Connect relay, even when an old
++    // link's credentials are still in the secret store.
++    if (!hasCloudPublicConfig) return null;
+     const [url, issuer, environmentCredential] = yield* Effect.all([
+       readSecretString(RELAY_URL_SECRET),
+       readSecretString(RELAY_ISSUER_SECRET),
+@@ -456,9 +460,11 @@ export const make = Effect.gen(function* () {
+       : null;
+   });
+ 
+-  const readPublishAgentActivityEnabled = readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
+-    Effect.map(isAgentActivityPublishingEnabledValue),
+-  );
++  const readPublishAgentActivityEnabled = hasCloudPublicConfig
++    ? readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
++        Effect.map(isAgentActivityPublishingEnabledValue),
++      )
++    : Effect.succeed(false);
+ 
+   const makeRelayClient = (relayConfig: {
+     readonly url: string;
+diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
+index 47c4a4c9..b9cad5c7 100644
+--- a/apps/server/src/server.ts
++++ b/apps/server/src/server.ts
+@@ -1103,6 +1103,13 @@ const layerMakeServer = Layer.unwrap(
+     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
+       Effect.gen(function* () {
+         const cloudLink = yield* CloudLink.CloudLink;
++        // Unplugged build: never reconcile or start a T3 Connect tunnel. The
++        // startup sequence still waits for this gate, so signal it before
++        // returning or command readiness (and every HTTP request) hangs.
++        if (!hasCloudPublicConfig) {
++          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
++          return;
++        }
+         // CloudLink unlinks on startup when the policy turns Connect off; nothing to restore.
+         if (!ManagedLimits.allowsConnect(yield* ManagedPolicy.ManagedPolicy)) {
+           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
