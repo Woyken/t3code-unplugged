@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/guest/GuestShareService.test.ts b/apps/server/src/guest/GuestShareService.test.ts
-index 7140222478..0dcdcd7962 100644
+index b377cd1ce0..32b7414d23 100644
 --- a/apps/server/src/guest/GuestShareService.test.ts
 +++ b/apps/server/src/guest/GuestShareService.test.ts
 @@ -14,6 +14,7 @@ import {
@@ -10,7 +10,7 @@ index 7140222478..0dcdcd7962 100644
    ThreadId,
    TurnItemId,
  } from "@t3tools/contracts";
-@@ -40,6 +41,7 @@ import {
+@@ -41,6 +42,7 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
  import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
  import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
  import * as ServerConfig from "../config.ts";
@@ -18,7 +18,7 @@ index 7140222478..0dcdcd7962 100644
  import * as SqlitePersistence from "../persistence/Sqlite.ts";
  import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
  import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
-@@ -86,6 +88,16 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
+@@ -89,6 +91,16 @@ const layerConnect = Layer.mock(CloudManagedEndpointRuntime)({
      protocol: "http2",
    })),
  });
@@ -35,15 +35,15 @@ index 7140222478..0dcdcd7962 100644
  const layerProviders = Layer.mock(ProviderRegistry.ProviderRegistry)({
    getProviders: Effect.succeed([]),
  });
-@@ -144,6 +156,7 @@ const layerTest = GuestShareService.layer.pipe(
+@@ -148,6 +160,7 @@ const layerTest = GuestShareService.layer.pipe(
    Layer.provide(layerProviders),
    Layer.provideMerge(ServerSettings.layerTest({ guestSharingEnabled: true })),
    Layer.provide(layerConnect),
 +  Layer.provide(layerDirectEndpoints),
    Layer.provideMerge(layerAnalytics),
    Layer.provide(ServerSecretStore.layer),
-   Layer.provideMerge(layerConfig),
-@@ -152,8 +165,9 @@ const layerTest = GuestShareService.layer.pipe(
+   Layer.provide(DocumentText.layer),
+@@ -157,8 +170,9 @@ const layerTest = GuestShareService.layer.pipe(
  
  const threadId = ThreadId.make("thread:guest-share-service");
  
@@ -55,7 +55,7 @@ index 7140222478..0dcdcd7962 100644
    const orchestrator = yield* Orchestrator.OrchestratorV2;
    yield* orchestrator.dispatch({
      type: "thread.create",
-@@ -171,9 +185,13 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
+@@ -176,9 +190,13 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId) {
    });
    const guestShares = yield* GuestShareService.GuestShareService;
    const { url } = yield* guestShares.create({ threadId });
@@ -71,7 +71,7 @@ index 7140222478..0dcdcd7962 100644
  });
  const shareThread = shareThreadFor(threadId);
  
-@@ -317,6 +335,23 @@ it.effect("refuses guest requests once T3 Connect no longer serves the link's ho
+@@ -322,6 +340,23 @@ it.effect("refuses guest requests once T3 Connect no longer serves the link's ho
    }).pipe(Effect.provide(layerTest)),
  );
  
@@ -96,7 +96,7 @@ index 7140222478..0dcdcd7962 100644
    Effect.gen(function* () {
      const { guestShares, credential } = yield* shareThread;
 diff --git a/apps/server/src/guest/GuestShareService.ts b/apps/server/src/guest/GuestShareService.ts
-index 36be1d1e21..cfe6e7ff72 100644
+index b5b21a7af2..2f8672c128 100644
 --- a/apps/server/src/guest/GuestShareService.ts
 +++ b/apps/server/src/guest/GuestShareService.ts
 @@ -45,6 +45,7 @@ import {
@@ -107,7 +107,7 @@ index 36be1d1e21..cfe6e7ff72 100644
  import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
  import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
  import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-@@ -75,10 +76,23 @@ const SNAPSHOT_ROW_LIMIT = 600;
+@@ -76,10 +77,23 @@ const SNAPSHOT_ROW_LIMIT = 600;
  const SNAPSHOT_USER_TURN_LIMIT = 20;
  // Shares with no open guest stream whose sent image replies are still kept.
  const SHARED_THREAD_REPLIES_LIMIT = 64;
@@ -133,7 +133,7 @@ index 36be1d1e21..cfe6e7ff72 100644
  const GUEST_ACCESS_MESSAGES = {
    ...GUEST_FAILURE,
    invalid: "This guest link is not valid.",
-@@ -148,7 +162,7 @@ export class GuestShareService extends Context.Service<
+@@ -149,7 +163,7 @@ export class GuestShareService extends Context.Service<
      readonly redeem: (
        request: GuestRedeemRequest,
      ) => Effect.Effect<
@@ -142,7 +142,7 @@ index 36be1d1e21..cfe6e7ff72 100644
        GuestShareAccessError
      >;
      /** Succeeds while the session can still open its share. */
-@@ -223,6 +237,7 @@ const make = Effect.gen(function* () {
+@@ -224,6 +238,7 @@ const make = Effect.gen(function* () {
    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
    const serverSettings = yield* ServerSettings.ServerSettingsService;
    const managedEndpoint = yield* CloudManagedEndpointRuntime;
@@ -150,7 +150,7 @@ index 36be1d1e21..cfe6e7ff72 100644
    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
    const fileSystem = yield* FileSystem.FileSystem;
    const random = yield* SecureRandom.SecureRandom;
-@@ -282,6 +297,32 @@ const make = Effect.gen(function* () {
+@@ -284,6 +299,32 @@ const make = Effect.gen(function* () {
    const connectHostname = managedEndpoint.inspectConnector.pipe(
      Effect.map((facts) => facts?.hostname ?? null),
    );
@@ -183,7 +183,7 @@ index 36be1d1e21..cfe6e7ff72 100644
    // A beta: while it is off, no link opens and every guest request is refused.
    const sharingEnabled = serverSettings.getSettings.pipe(
      Effect.map((settings) => settings.guestSharingEnabled),
-@@ -306,7 +347,7 @@ const make = Effect.gen(function* () {
+@@ -308,7 +349,7 @@ const make = Effect.gen(function* () {
        Effect.orDie,
      );
  
@@ -192,7 +192,7 @@ index 36be1d1e21..cfe6e7ff72 100644
    const authorize = Effect.fn("GuestShareService.authorize")(function* (
      token: string,
      kind: "invite" | "session",
-@@ -328,7 +369,7 @@ const make = Effect.gen(function* () {
+@@ -330,7 +371,7 @@ const make = Effect.gen(function* () {
        thread.deletedAt !== null ||
        DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt) ||
        (kind === "session" && share.guestName === null) ||
@@ -201,7 +201,7 @@ index 36be1d1e21..cfe6e7ff72 100644
      ) {
        return yield* inactive;
      }
-@@ -339,9 +380,9 @@ const make = Effect.gen(function* () {
+@@ -341,9 +382,9 @@ const make = Effect.gen(function* () {
      if (!(yield* sharingEnabled)) {
        return yield* new GuestShareCreateError({ reason: "disabled" });
      }
@@ -213,7 +213,7 @@ index 36be1d1e21..cfe6e7ff72 100644
      }
      const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
      const now = yield* DateTime.now;
-@@ -363,7 +404,7 @@ const make = Effect.gen(function* () {
+@@ -365,7 +406,7 @@ const make = Effect.gen(function* () {
        return yield* new GuestShareCreateError({ reason: "changed" });
      }
      const credential = yield* signInvite(shareId);
@@ -222,7 +222,7 @@ index 36be1d1e21..cfe6e7ff72 100644
    });
  
    const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
-@@ -378,7 +419,7 @@ const make = Effect.gen(function* () {
+@@ -380,7 +421,7 @@ const make = Effect.gen(function* () {
      // Guests have no client connection, so their events carry no surface.
      yield* analytics.record("feature.used", { feature: "guest_share.join" });
      const token = yield* signSession({ kind: "session", threadId: thread.id, shareId: share.id });
@@ -231,7 +231,7 @@ index 36be1d1e21..cfe6e7ff72 100644
    });
  
    const check = Effect.fn("GuestShareService.check")(function* (session: string) {
-@@ -590,14 +631,14 @@ const make = Effect.gen(function* () {
+@@ -598,14 +639,14 @@ const make = Effect.gen(function* () {
          }),
        ),
        Stream.takeUntil((event) => event.type === "ended"),
@@ -250,7 +250,7 @@ index 36be1d1e21..cfe6e7ff72 100644
          ),
        ),
 diff --git a/apps/server/src/guest/http.ts b/apps/server/src/guest/http.ts
-index b3e856200c..dd4de9162e 100644
+index c92dfaaa4d..008666369e 100644
 --- a/apps/server/src/guest/http.ts
 +++ b/apps/server/src/guest/http.ts
 @@ -145,11 +145,12 @@ const redeemRoute = HttpRouter.add(
@@ -309,10 +309,10 @@ index 4e5c8a7791..1b8aebf625 100644
    }).pipe(Atom.withLabel(`guest-share:available:${environmentId}`)),
  );
 diff --git a/apps/web/src/components/settings/LabsSettingsPanel.tsx b/apps/web/src/components/settings/LabsSettingsPanel.tsx
-index 3ab93229b2..3f00ea5f61 100644
+index 38be7d6115..cdc766ad9e 100644
 --- a/apps/web/src/components/settings/LabsSettingsPanel.tsx
 +++ b/apps/web/src/components/settings/LabsSettingsPanel.tsx
-@@ -140,24 +140,25 @@ function GuestLinksRow() {
+@@ -99,24 +99,25 @@ function GuestLinksRow() {
    const updateSettings = useUpdateScopedSettings();
    const scope = useOptionalSettingsScope();
    const primaryPolicy = usePrimaryManagedPolicy();
@@ -345,10 +345,10 @@ index 3ab93229b2..3f00ea5f61 100644
              Sharing & access
            </Link>
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index 39c3deb5d1..dff040ac2b 100644
+index 1686b3ea6e..e70fd814bc 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
-@@ -479,7 +479,7 @@ export const SETTINGS_SEARCH_ITEMS = [
+@@ -508,7 +508,7 @@ export const SETTINGS_SEARCH_ITEMS = [
      title: "Guest links",
      to: "/settings/labs",
      scope: "environment",
