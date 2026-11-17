@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/guest/GuestShareService.test.ts b/apps/server/src/guest/GuestShareService.test.ts
-index b377cd1ce0..32b7414d23 100644
+index b377cd1..32b7414 100644
 --- a/apps/server/src/guest/GuestShareService.test.ts
 +++ b/apps/server/src/guest/GuestShareService.test.ts
 @@ -14,6 +14,7 @@ import {
@@ -96,10 +96,22 @@ index b377cd1ce0..32b7414d23 100644
    Effect.gen(function* () {
      const { guestShares, credential } = yield* shareThread;
 diff --git a/apps/server/src/guest/GuestShareService.ts b/apps/server/src/guest/GuestShareService.ts
-index b5b21a7af2..2f8672c128 100644
+index b5b21a7..f538f74 100644
 --- a/apps/server/src/guest/GuestShareService.ts
 +++ b/apps/server/src/guest/GuestShareService.ts
-@@ -45,6 +45,7 @@ import {
+@@ -8,9 +8,11 @@ import {
+   type GuestShareCreateInput,
+   type GuestShareCreateResult,
+   GuestShareId,
++  guestShareAutoApproves,
+   type GuestRedeemRequest,
+   type GuestStreamEvent,
+   type GuestSubmitRequest,
++  MessageId,
+   type OrchestrationV2AppThread,
+   type OrchestrationV2CommandOutputFrame,
+   type OrchestrationV2DomainEvent,
+@@ -45,6 +47,7 @@ import {
  } from "../attachmentStore.ts";
  import * as ServerConfig from "../config.ts";
  import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
@@ -107,7 +119,7 @@ index b5b21a7af2..2f8672c128 100644
  import * as CommandOutputHub from "../orchestration-v2/CommandOutputHub.ts";
  import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
  import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-@@ -76,10 +77,23 @@ const SNAPSHOT_ROW_LIMIT = 600;
+@@ -76,10 +79,23 @@ const SNAPSHOT_ROW_LIMIT = 600;
  const SNAPSHOT_USER_TURN_LIMIT = 20;
  // Shares with no open guest stream whose sent image replies are still kept.
  const SHARED_THREAD_REPLIES_LIMIT = 64;
@@ -133,7 +145,7 @@ index b5b21a7af2..2f8672c128 100644
  const GUEST_ACCESS_MESSAGES = {
    ...GUEST_FAILURE,
    invalid: "This guest link is not valid.",
-@@ -149,7 +163,7 @@ export class GuestShareService extends Context.Service<
+@@ -149,7 +165,7 @@ export class GuestShareService extends Context.Service<
      readonly redeem: (
        request: GuestRedeemRequest,
      ) => Effect.Effect<
@@ -142,7 +154,7 @@ index b5b21a7af2..2f8672c128 100644
        GuestShareAccessError
      >;
      /** Succeeds while the session can still open its share. */
-@@ -224,6 +238,7 @@ const make = Effect.gen(function* () {
+@@ -224,6 +240,7 @@ const make = Effect.gen(function* () {
    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
    const serverSettings = yield* ServerSettings.ServerSettingsService;
    const managedEndpoint = yield* CloudManagedEndpointRuntime;
@@ -150,7 +162,7 @@ index b5b21a7af2..2f8672c128 100644
    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
    const fileSystem = yield* FileSystem.FileSystem;
    const random = yield* SecureRandom.SecureRandom;
-@@ -284,6 +299,32 @@ const make = Effect.gen(function* () {
+@@ -284,6 +301,32 @@ const make = Effect.gen(function* () {
    const connectHostname = managedEndpoint.inspectConnector.pipe(
      Effect.map((facts) => facts?.hostname ?? null),
    );
@@ -183,7 +195,7 @@ index b5b21a7af2..2f8672c128 100644
    // A beta: while it is off, no link opens and every guest request is refused.
    const sharingEnabled = serverSettings.getSettings.pipe(
      Effect.map((settings) => settings.guestSharingEnabled),
-@@ -308,7 +349,7 @@ const make = Effect.gen(function* () {
+@@ -308,7 +351,7 @@ const make = Effect.gen(function* () {
        Effect.orDie,
      );
  
@@ -192,7 +204,7 @@ index b5b21a7af2..2f8672c128 100644
    const authorize = Effect.fn("GuestShareService.authorize")(function* (
      token: string,
      kind: "invite" | "session",
-@@ -330,7 +371,7 @@ const make = Effect.gen(function* () {
+@@ -330,7 +373,7 @@ const make = Effect.gen(function* () {
        thread.deletedAt !== null ||
        DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt) ||
        (kind === "session" && share.guestName === null) ||
@@ -201,7 +213,7 @@ index b5b21a7af2..2f8672c128 100644
      ) {
        return yield* inactive;
      }
-@@ -341,9 +382,9 @@ const make = Effect.gen(function* () {
+@@ -341,9 +384,9 @@ const make = Effect.gen(function* () {
      if (!(yield* sharingEnabled)) {
        return yield* new GuestShareCreateError({ reason: "disabled" });
      }
@@ -213,7 +225,15 @@ index b5b21a7af2..2f8672c128 100644
      }
      const shareId = GuestShareId.make(base64UrlEncode(yield* random.randomBytes(SHARE_ID_BYTES)));
      const now = yield* DateTime.now;
-@@ -365,7 +406,7 @@ const make = Effect.gen(function* () {
+@@ -356,6 +399,7 @@ const make = Effect.gen(function* () {
+         shareId,
+         host,
+         expiresAt,
++        ...(input.autoApprove === true ? { autoApprove: true } : {}),
+       })
+       .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "thread_unavailable" })));
+     const { thread } = yield* orchestrator
+@@ -365,7 +409,7 @@ const make = Effect.gen(function* () {
        return yield* new GuestShareCreateError({ reason: "changed" });
      }
      const credential = yield* signInvite(shareId);
@@ -222,7 +242,7 @@ index b5b21a7af2..2f8672c128 100644
    });
  
    const redeem = Effect.fn("GuestShareService.redeem")(function* (request: GuestRedeemRequest) {
-@@ -380,7 +421,7 @@ const make = Effect.gen(function* () {
+@@ -380,7 +424,7 @@ const make = Effect.gen(function* () {
      // Guests have no client connection, so their events carry no surface.
      yield* analytics.record("feature.used", { feature: "guest_share.join" });
      const token = yield* signSession({ kind: "session", threadId: thread.id, shareId: share.id });
@@ -231,7 +251,54 @@ index b5b21a7af2..2f8672c128 100644
    });
  
    const check = Effect.fn("GuestShareService.check")(function* (session: string) {
-@@ -598,14 +639,14 @@ const make = Effect.gen(function* () {
+@@ -466,15 +510,45 @@ const make = Effect.gen(function* () {
+       return yield* new GuestShareAccessError({ reason: "empty" });
+     }
+     const attachments = yield* storeUploads(thread.id, uploads);
++    const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
+     yield* dispatchGuestCommand({
+       type: "thread.guest-message.submit",
+       commandId: yield* commandId("submit"),
+       threadId: thread.id,
+       shareId: share.id,
+-      guestMessageId: GuestMessageId.make(yield* random.uuidV4()),
++      guestMessageId,
+       text: request.text,
+       ...(attachments.length === 0 ? {} : { attachments }),
+     }).pipe(Effect.onError(() => removeStored(attachments)));
++    if (guestShareAutoApproves(share)) {
++      // Same send the owner's Send button dispatches, so the agent gets the guest's text with the
++      // usual attribution. A failed send leaves the message waiting for the owner instead of
++      // failing a submission the guest already made.
++      const sendCommandId = yield* commandId("auto-send");
++      yield* orchestrator
++        .dispatch({
++          type: "message.dispatch",
++          commandId: sendCommandId,
++          threadId: thread.id,
++          messageId: MessageId.make(sendCommandId),
++          guestMessageId,
++          text: "",
++          attachments,
++          dispatchMode: { type: "queue_after_active" },
++          createdBy: "user",
++          creationSource: "web",
++        })
++        .pipe(
++          Effect.tapError((error) =>
++            Effect.logWarning("Guest message auto-send failed", {
++              threadId: thread.id,
++              guestMessageId,
++              cause: error,
++            }),
++          ),
++          Effect.ignore,
++        );
++    }
+     yield* analytics.record("feature.used", {
+       feature: "guest_message.submit",
+       variant: attachments.length === 0 ? "text_only" : "with_files",
+@@ -598,14 +672,14 @@ const make = Effect.gen(function* () {
          }),
        ),
        Stream.takeUntil((event) => event.type === "ended"),
@@ -250,7 +317,7 @@ index b5b21a7af2..2f8672c128 100644
          ),
        ),
 diff --git a/apps/server/src/guest/http.ts b/apps/server/src/guest/http.ts
-index c92dfaaa4d..008666369e 100644
+index c92dfaa..0086663 100644
 --- a/apps/server/src/guest/http.ts
 +++ b/apps/server/src/guest/http.ts
 @@ -145,11 +145,12 @@ const redeemRoute = HttpRouter.add(
@@ -268,11 +335,187 @@ index c92dfaaa4d..008666369e 100644
              sameSite: "strict",
              path: GUEST_ROUTE_PREFIX,
              maxAge: Duration.millis(GUEST_SHARE_TTL_MS),
+diff --git a/apps/server/src/orchestration-v2/GuestShare.test.ts b/apps/server/src/orchestration-v2/GuestShare.test.ts
+index d789b20..322b462 100644
+--- a/apps/server/src/orchestration-v2/GuestShare.test.ts
++++ b/apps/server/src/orchestration-v2/GuestShare.test.ts
+@@ -139,6 +139,37 @@ it.effect("redeems a guest link once and sends each guest message once, with its
+   }).pipe(Effect.provide(layerTest)),
+ );
+ 
++it.effect("turns guest auto-approve on and off, and only while a share is open", () =>
++  Effect.gen(function* () {
++    const orchestrator = yield* setup;
++    const projections = yield* ProjectionStore.ProjectionStoreV2;
++    const setAutoApprove = (id: string, autoApprove: boolean) =>
++      orchestrator.dispatch({
++        type: "thread.guest-share.auto-approve.set",
++        commandId: CommandId.make(id),
++        threadId,
++        autoApprove,
++      });
++    // Off unless the owner turns it on.
++    assert.notEqual((yield* projections.getThread(threadId)).guestShare?.autoApprove, true);
++
++    yield* setAutoApprove("auto-approve-on", true);
++    assert.equal((yield* projections.getThread(threadId)).guestShare?.autoApprove, true);
++
++    yield* setAutoApprove("auto-approve-off", false);
++    assert.equal((yield* projections.getThread(threadId)).guestShare?.autoApprove, false);
++
++    yield* orchestrator.dispatch({
++      type: "thread.guest-share.close",
++      commandId: CommandId.make("close-guest-share"),
++      threadId,
++    });
++    assert.isTrue(
++      Exit.isFailure(yield* Effect.exit(setAutoApprove("auto-approve-after-close", true))),
++    );
++  }).pipe(Effect.provide(layerTest)),
++);
++
+ it.effect("rejects guest messages until the link is redeemed and after archive", () =>
+   Effect.gen(function* () {
+     const orchestrator = yield* setup;
+diff --git a/apps/server/src/orchestration-v2/GuestShareDecider.ts b/apps/server/src/orchestration-v2/GuestShareDecider.ts
+index 00f9f8a..4953036 100644
+--- a/apps/server/src/orchestration-v2/GuestShareDecider.ts
++++ b/apps/server/src/orchestration-v2/GuestShareDecider.ts
+@@ -20,6 +20,7 @@ export type GuestShareCommand = Extract<
+       | "thread.guest-share.open"
+       | "thread.guest-share.redeem"
+       | "thread.guest-share.close"
++      | "thread.guest-share.auto-approve.set"
+       | "thread.guest-message.submit"
+       | "thread.guest-message.dismiss";
+   }
+@@ -119,9 +120,16 @@ export function decideGuestShareCommand(input: {
+         createdAt: DateTime.formatIso(now),
+         expiresAt: command.expiresAt,
+         guestName: null,
++        ...(command.autoApprove === true ? { autoApprove: true } : {}),
+         messages: [],
+       });
+     }
++    case "thread.guest-share.auto-approve.set": {
++      if (share === null || isExpired(share, now)) {
++        return Result.fail("This thread has no guest link.");
++      }
++      return withShare({ ...share, autoApprove: command.autoApprove });
++    }
+     case "thread.guest-share.close":
+       return share === null ? Result.succeed(thread) : withShare(null);
+     case "thread.guest-share.redeem": {
+diff --git a/apps/server/src/orchestration-v2/Orchestrator.ts b/apps/server/src/orchestration-v2/Orchestrator.ts
+index 2805935..8666001 100644
+--- a/apps/server/src/orchestration-v2/Orchestrator.ts
++++ b/apps/server/src/orchestration-v2/Orchestrator.ts
+@@ -625,6 +625,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
+     case "thread.guest-share.open":
+     case "thread.guest-share.redeem":
+     case "thread.guest-share.close":
++    case "thread.guest-share.auto-approve.set":
+     case "thread.guest-message.submit":
+     case "thread.guest-message.dismiss":
+     case "thread.settle":
+@@ -15093,6 +15094,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
+       case "thread.guest-share.open":
+       case "thread.guest-share.redeem":
+       case "thread.guest-share.close":
++      case "thread.guest-share.auto-approve.set":
+       case "thread.guest-message.submit":
+       case "thread.guest-message.dismiss":
+         yield* dispatchGuestShare(command, events, effects);
+diff --git a/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts b/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
+index 0d428e1..990ce77 100644
+--- a/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
++++ b/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
+@@ -143,6 +143,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
+     case "thread.unarchive":
+     case "thread.delete":
+     case "thread.guest-share.close":
++    case "thread.guest-share.auto-approve.set":
+     case "thread.guest-message.dismiss":
+     case "thread.settle":
+     case "thread.auto-settle":
 diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/components/chat/GuestShareControls.tsx
-index 797cb0e5c5..cb8471fab6 100644
+index 797cb0e..f43454a 100644
 --- a/apps/web/src/components/chat/GuestShareControls.tsx
 +++ b/apps/web/src/components/chat/GuestShareControls.tsx
-@@ -137,6 +137,12 @@ function GuestShareDialog({
+@@ -24,6 +24,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
+ import { cn } from "~/lib/utils";
+ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
+ import { Button } from "../ui/button";
++import { Switch } from "../ui/switch";
+ import {
+   Dialog,
+   DialogDescription,
+@@ -77,14 +78,34 @@ function GuestShareDialog({
+   const createGuestShare = useAtomCommand(serverEnvironment.createGuestShare, {
+     reportFailure: false,
+   });
++  const setAutoApprove = useOrchestrationCommand(threadEnvironment.setGuestShareAutoApprove, {
++    label: "update guest share",
++  });
++  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
+   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "guest link" });
+   const [state, setState] = useState<CreateState>({ status: "idle" });
++  // Only used before a share exists; an active share carries its own setting.
++  const [createAutoApprove, setCreateAutoApprove] = useState(false);
++  const autoApprove = activeShare === null ? createAutoApprove : activeShare.autoApprove === true;
++  const nowMinute = useNowMinute();
++  const shareExpired = activeShare !== null && activeShare.expiresAt.slice(0, 16) <= nowMinute;
++
++  const toggleAutoApprove = async (next: boolean) => {
++    if (activeShare === null) {
++      setCreateAutoApprove(next);
++      return;
++    }
++    await setAutoApprove({
++      environmentId: threadRef.environmentId,
++      input: { threadId: threadRef.threadId, autoApprove: next },
++    });
++  };
+ 
+   const create = async () => {
+     setState({ status: "creating" });
+     const result = await createGuestShare({
+       environmentId: threadRef.environmentId,
+-      input: { threadId: threadRef.threadId },
++      input: { threadId: threadRef.threadId, autoApprove },
+     });
+     if (result._tag === "Success") {
+       setState({ status: "created", url: result.value.url });
+@@ -113,10 +134,27 @@ function GuestShareDialog({
+           <DialogTitle>Share with guest</DialogTitle>
+           <DialogDescription>
+             The guest sees the thread as you do, including command output and the agent&apos;s
+-            reasoning. Each message they send waits for you.
++            reasoning.{" "}
++            {autoApprove
++              ? "Their messages go straight to the agent."
++              : "Each message they send waits for you."}
+           </DialogDescription>
+         </DialogHeader>
+         <DialogPanel>
++          <div className="mb-4 flex items-start justify-between gap-4">
++            <div className="flex flex-col gap-0.5">
++              <span className="text-sm">Send guest messages without approval</span>
++              <span className="text-muted-foreground text-xs">
++                Off by default. While on, every message the guest sends reaches the agent at once.
++              </span>
++            </div>
++            <Switch
++              checked={autoApprove}
++              disabled={shareExpired || (activeShare === null ? !canCreate : !canOperate)}
++              aria-label="Send guest messages without approval"
++              onCheckedChange={(next) => void toggleAutoApprove(next)}
++            />
++          </div>
+           {state.status === "created" ? (
+             <div className="flex items-center gap-2">
+               <Input
+@@ -137,6 +175,12 @@ function GuestShareDialog({
                  : "The link works once and expires in 24 hours."}
              </p>
            )}
@@ -286,7 +529,7 @@ index 797cb0e5c5..cb8471fab6 100644
              <p role="alert" className="text-destructive text-xs">
                {state.message}
 diff --git a/apps/web/src/components/chat/guestShareAvailability.ts b/apps/web/src/components/chat/guestShareAvailability.ts
-index 4e5c8a7791..1b8aebf625 100644
+index 4e5c8a7..1b8aebf 100644
 --- a/apps/web/src/components/chat/guestShareAvailability.ts
 +++ b/apps/web/src/components/chat/guestShareAvailability.ts
 @@ -7,7 +7,8 @@ import { serverEnvironment } from "~/state/server";
@@ -309,7 +552,7 @@ index 4e5c8a7791..1b8aebf625 100644
    }).pipe(Atom.withLabel(`guest-share:available:${environmentId}`)),
  );
 diff --git a/apps/web/src/components/settings/LabsSettingsPanel.tsx b/apps/web/src/components/settings/LabsSettingsPanel.tsx
-index 38be7d6115..cdc766ad9e 100644
+index 38be7d6..cdc766a 100644
 --- a/apps/web/src/components/settings/LabsSettingsPanel.tsx
 +++ b/apps/web/src/components/settings/LabsSettingsPanel.tsx
 @@ -99,24 +99,25 @@ function GuestLinksRow() {
@@ -345,7 +588,7 @@ index 38be7d6115..cdc766ad9e 100644
              Sharing & access
            </Link>
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index 1686b3ea6e..e70fd814bc 100644
+index 1686b3e..e70fd81 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
 @@ -508,7 +508,7 @@ export const SETTINGS_SEARCH_ITEMS = [
@@ -357,8 +600,59 @@ index 1686b3ea6e..e70fd814bc 100644
    },
    {
      id: "linked-environments-beta",
+diff --git a/packages/client-runtime/src/operations/commands.ts b/packages/client-runtime/src/operations/commands.ts
+index 50717d0..6845a4d 100644
+--- a/packages/client-runtime/src/operations/commands.ts
++++ b/packages/client-runtime/src/operations/commands.ts
+@@ -517,6 +517,21 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
+   return yield* simpleThreadCommand("thread.guest-share.close", input);
+ });
+ 
++export interface SetGuestShareAutoApproveInput extends ThreadCommandInput {
++  readonly autoApprove: boolean;
++}
++/** Turns the owner's approval queue on or off for the current share. */
++export const setGuestShareAutoApprove = Effect.fn("EnvironmentCommands.setGuestShareAutoApprove")(
++  function* (input: SetGuestShareAutoApproveInput) {
++    return yield* dispatch({
++      type: "thread.guest-share.auto-approve.set",
++      commandId: yield* allocateCommandId(input),
++      threadId: input.threadId,
++      autoApprove: input.autoApprove,
++    });
++  },
++);
++
+ export interface ResolveGuestMessageInput extends ThreadCommandInput {
+   readonly guestMessageId: GuestMessageId;
+   readonly decision: "send" | "dismiss";
+diff --git a/packages/client-runtime/src/state/threadCommands.ts b/packages/client-runtime/src/state/threadCommands.ts
+index 0e9de03..cad91d5 100644
+--- a/packages/client-runtime/src/state/threadCommands.ts
++++ b/packages/client-runtime/src/state/threadCommands.ts
+@@ -27,6 +27,7 @@ import {
+   archiveThread,
+   closeGuestShare,
+   resolveGuestMessage,
++  setGuestShareAutoApprove,
+   cancelQueuedRun,
+   createThread,
+   deleteThread,
+@@ -178,6 +179,12 @@ export function createThreadEnvironmentAtoms<R, E>(
+       scheduler,
+       concurrency,
+     }),
++    setGuestShareAutoApprove: createEnvironmentCommand(runtime, {
++      label: "environment-data:commands:thread:set-guest-share-auto-approve",
++      execute: setGuestShareAutoApprove,
++      scheduler,
++      concurrency,
++    }),
+     resolveGuestMessage: createEnvironmentCommand(runtime, {
+       label: "environment-data:commands:thread:resolve-guest-message",
+       execute: resolveGuestMessage,
 diff --git a/packages/contracts/src/guestShare.ts b/packages/contracts/src/guestShare.ts
-index 715a837dae..daae89a609 100644
+index 715a837..5d42ec4 100644
 --- a/packages/contracts/src/guestShare.ts
 +++ b/packages/contracts/src/guestShare.ts
 @@ -11,9 +11,10 @@ import {
@@ -375,7 +669,7 @@ index 715a837dae..daae89a609 100644
   */
  export const GUEST_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
  export const GUEST_MESSAGE_MAX_LENGTH = 4_000;
-@@ -42,7 +43,11 @@ export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
+@@ -42,20 +43,37 @@ export type ThreadGuestMessage = typeof ThreadGuestMessage.Type;
  
  export const ThreadGuestShare = Schema.Struct({
    id: GuestShareId,
@@ -388,7 +682,34 @@ index 715a837dae..daae89a609 100644
    host: TrimmedNonEmptyString,
    createdAt: IsoDateTime,
    expiresAt: IsoDateTime,
-@@ -66,7 +71,8 @@ export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;
+   /** Set once, when the guest redeems the link. */
+   guestName: Schema.NullOr(TrimmedNonEmptyString),
++  /**
++   * The guest's messages go straight to the agent instead of waiting for the owner to send each
++   * one. Off unless the owner turns it on for this share.
++   */
++  autoApprove: Schema.optional(Schema.Boolean),
+   messages: Schema.Array(ThreadGuestMessage),
+ });
+ export type ThreadGuestShare = typeof ThreadGuestShare.Type;
+ 
++/** Whether guest messages skip the owner's approval queue. */
++export const guestShareAutoApproves = (share: ThreadGuestShare | null | undefined): boolean =>
++  share?.autoApprove === true;
++
+ export const pendingGuestMessageCount = (share: ThreadGuestShare | null | undefined): number =>
+   share?.messages.filter((message) => message.status === "pending").length ?? 0;
+ 
+-export const GuestShareCreateInput = Schema.Struct({ threadId: ThreadId });
++export const GuestShareCreateInput = Schema.Struct({
++  threadId: ThreadId,
++  /** Starts the share with guest messages sent straight to the agent. Defaults to off. */
++  autoApprove: Schema.optional(Schema.Boolean),
++});
+ export type GuestShareCreateInput = typeof GuestShareCreateInput.Type;
+ 
+ export const GuestShareCreateResult = Schema.Struct({
+@@ -66,7 +84,8 @@ export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;
  
  const GUEST_SHARE_CREATE_MESSAGES = {
    disabled: "Guest links are off. Turn them on in Settings > Labs.",
@@ -398,7 +719,7 @@ index 715a837dae..daae89a609 100644
    thread_unavailable: "This thread cannot be shared.",
    read_failed: "Failed to read the shared thread.",
    changed: "The guest link changed while it was being created.",
-@@ -77,7 +83,7 @@ export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateEr
+@@ -77,7 +96,7 @@ export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateEr
    {
      reason: Schema.Literals([
        "disabled",
@@ -407,3 +728,29 @@ index 715a837dae..daae89a609 100644
        "thread_unavailable",
        "read_failed",
        "changed",
+diff --git a/packages/contracts/src/orchestrationV2.ts b/packages/contracts/src/orchestrationV2.ts
+index 38d2e98..5ee1af0 100644
+--- a/packages/contracts/src/orchestrationV2.ts
++++ b/packages/contracts/src/orchestrationV2.ts
+@@ -3137,6 +3137,12 @@ export const OrchestrationV2Command = Schema.Union([
+     commandId: CommandId,
+     threadId: ThreadId,
+   }),
++  Schema.Struct({
++    type: Schema.Literal("thread.guest-share.auto-approve.set"),
++    commandId: CommandId,
++    threadId: ThreadId,
++    autoApprove: Schema.Boolean,
++  }),
+   Schema.Struct({
+     type: Schema.Literal("thread.guest-message.dismiss"),
+     commandId: CommandId,
+@@ -3589,6 +3595,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
+     shareId: GuestShareId,
+     host: TrimmedNonEmptyString,
+     expiresAt: IsoDateTime,
++    /** Starts the share with guest messages sent straight to the agent. Defaults to off. */
++    autoApprove: Schema.optional(Schema.Boolean),
+   }),
+   Schema.Struct({
+     type: Schema.Literal("thread.guest-share.redeem"),
