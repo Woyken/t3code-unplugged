@@ -210,12 +210,25 @@ that every command the prompt requires is not blocked by a deny rule. A missing
 permission fails fast instead of consuming the agent's step budget.
 
 The result is validated in a clean checkout and published as a regular PR on
-`patch-fix/<tag>` or `build-fix/<tag>`; nothing is auto-merged and the agents
-never receive a GitHub write token. The publish job runs
+`patch-fix/<tag>` or `build-fix/<tag>`. The publish job runs
 `check-patches.sh` with `T3CODE_PATCH_TYPECHECK=1`, so a proposed patch fix is
 only offered if the series still applies, strips, and typechecks; for build
 drift it also runs `bash -n` over the scripts and parses every workflow as YAML
 before opening the PR.
+
+Once the PR exists, a separate `merge` job runs this repository's own
+`Patch check` CI (`ci.yml`) on the PR head branch and waits for it. It dispatches
+the run itself because `pull_request` runs for a PR opened with `GITHUB_TOKEN`
+wait in GitHub's `action_required` approval state, so they would never finish
+unattended. If the run passes, the job squash-merges the PR pinned to the tested
+commit; the report job then closes the matching `patch-drift` or
+`release-drift` issue and dispatches `Release` for the same upstream tag, so the
+failed release is retried immediately instead of waiting for the next hourly
+run. The merge job also retries an already-open fix PR, so a transient CI or
+merge failure does not need `force`. A tag whose fix PR is already merged is not
+fixed automatically again, so a fix that does not actually resolve the failure
+leaves an issue for manual work instead of looping merge, release, and fix. The
+agents never receive a GitHub write token; the `publish` and `merge` jobs do.
 
 Manual runs:
 
@@ -227,19 +240,23 @@ gh workflow run patch-drift.yml -f force=true
 ```
 
 `dry_run` runs the agent and agent-side checks but skips clean-checkout
-validation and the PR. `force` reruns the agent when an open fix PR or a
-previous failed attempt exists. After a failed attempt, a hidden marker is
-recorded on the `patch-drift` or `release-drift` issue so subsequent release
-failures do not retry the same tag indefinitely. When a release succeeds, the
-matching open issues are closed automatically. The fixers run on `main`; the
-`autoFixer` environment is restricted to that branch.
+validation, the PR, and the merge. `force` reruns the agent when an open fix
+PR, an already-merged fix, or a previous failed attempt exists. After a failed
+attempt, a hidden marker is recorded on the `patch-drift` or `release-drift`
+issue so subsequent release failures do not retry the same tag indefinitely.
+When a release succeeds, the matching open issues are closed automatically.
+The fixers run on `main`; the `autoFixer` environment is restricted to that
+branch.
 
-Review AI-generated PRs before merging. The patch fixer changes the patch
-series; the release fixer can change the release workflow, build scripts, and,
-for build drift, the patch series. Both agents have broad local shell access;
-the deny rules are guardrails against the most dangerous operations, not a
-sandbox. `verify-strip` checks the unplugged guarantees, but it cannot prove
-that a patch or workflow change is semantically correct or benign.
+The automated flow merges a fix once repository CI is green, which makes CI the
+last gate before a release. The patch fixer changes the patch series; the
+release fixer can change the release workflow, build scripts, and, for build
+drift, the patch series. Both agents have broad local shell access; the deny
+rules are guardrails against the most dangerous operations, not a sandbox.
+`verify-strip` checks the unplugged guarantees, but neither it nor CI can prove
+that a patch or workflow change is semantically correct or benign. If a change
+needs human review before landing, run the fixer with `dry_run=true` to
+validate it without opening a PR, or revert the merge afterwards.
 
 ## Tests
 
