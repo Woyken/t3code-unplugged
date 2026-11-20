@@ -1,13 +1,13 @@
 diff --git a/apps/web/src/cloud/publicConfig.ts b/apps/web/src/cloud/publicConfig.ts
-index 9f1238b8..6458792c 100644
+index ec9cf15..794d1c4 100644
 --- a/apps/web/src/cloud/publicConfig.ts
 +++ b/apps/web/src/cloud/publicConfig.ts
-@@ -62,50 +62,13 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
+@@ -71,50 +71,13 @@ export function relayTelemetryEnabled(): boolean | null {
  }
  
  export function resolveRelayTracingConfig() {
 -  // The relay exporter is created during module initialization, so this must be synchronous.
--  if (typeof window !== "undefined" && window.desktopBridge?.getRelayTelemetryEnabled() === false) {
+-  if (relayTelemetryEnabled() === false) {
 -    return null;
 -  }
 -  const { relayTracing } = resolveCloudPublicConfig();
@@ -58,10 +58,10 @@ index 9f1238b8..6458792c 100644
  
  export function resolveRelayClerkTokenOptions() {
 diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
-index 501bac5d..5bf9ebc3 100644
+index 073fca7..414b073 100644
 --- a/apps/web/vite.config.ts
 +++ b/apps/web/vite.config.ts
-@@ -34,13 +34,15 @@ const explicitHost = process.env.HOST?.trim();
+@@ -36,13 +36,15 @@ const explicitHost = process.env.HOST?.trim();
  const host = explicitHost || "localhost";
  const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
  const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
