@@ -336,10 +336,10 @@ index c92dfaa..0086663 100644
              path: GUEST_ROUTE_PREFIX,
              maxAge: Duration.millis(GUEST_SHARE_TTL_MS),
 diff --git a/apps/server/src/orchestration-v2/GuestShare.test.ts b/apps/server/src/orchestration-v2/GuestShare.test.ts
-index d789b20..322b462 100644
+index 7ea6f95..939c5b1 100644
 --- a/apps/server/src/orchestration-v2/GuestShare.test.ts
 +++ b/apps/server/src/orchestration-v2/GuestShare.test.ts
-@@ -139,6 +139,37 @@ it.effect("redeems a guest link once and sends each guest message once, with its
+@@ -152,6 +152,37 @@ it.effect("redeems a guest link once and sends each guest message once, with its
    }).pipe(Effect.provide(layerTest)),
  );
  
@@ -378,7 +378,7 @@ index d789b20..322b462 100644
    Effect.gen(function* () {
      const orchestrator = yield* setup;
 diff --git a/apps/server/src/orchestration-v2/GuestShareDecider.ts b/apps/server/src/orchestration-v2/GuestShareDecider.ts
-index 00f9f8a..4953036 100644
+index 9173d4e..518ceec 100644
 --- a/apps/server/src/orchestration-v2/GuestShareDecider.ts
 +++ b/apps/server/src/orchestration-v2/GuestShareDecider.ts
 @@ -20,6 +20,7 @@ export type GuestShareCommand = Extract<
@@ -389,7 +389,7 @@ index 00f9f8a..4953036 100644
        | "thread.guest-message.submit"
        | "thread.guest-message.dismiss";
    }
-@@ -119,9 +120,16 @@ export function decideGuestShareCommand(input: {
+@@ -122,9 +123,16 @@ export function decideGuestShareCommand(input: {
          createdAt: DateTime.formatIso(now),
          expiresAt: command.expiresAt,
          guestName: null,
@@ -407,10 +407,10 @@ index 00f9f8a..4953036 100644
        return share === null ? Result.succeed(thread) : withShare(null);
      case "thread.guest-share.redeem": {
 diff --git a/apps/server/src/orchestration-v2/Orchestrator.ts b/apps/server/src/orchestration-v2/Orchestrator.ts
-index 2805935..8666001 100644
+index 6bfd95e..ca7a237 100644
 --- a/apps/server/src/orchestration-v2/Orchestrator.ts
 +++ b/apps/server/src/orchestration-v2/Orchestrator.ts
-@@ -625,6 +625,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
+@@ -636,6 +636,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
      case "thread.guest-share.open":
      case "thread.guest-share.redeem":
      case "thread.guest-share.close":
@@ -418,7 +418,7 @@ index 2805935..8666001 100644
      case "thread.guest-message.submit":
      case "thread.guest-message.dismiss":
      case "thread.settle":
-@@ -15093,6 +15094,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
+@@ -15612,6 +15613,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
        case "thread.guest-share.open":
        case "thread.guest-share.redeem":
        case "thread.guest-share.close":
@@ -427,7 +427,7 @@ index 2805935..8666001 100644
        case "thread.guest-message.dismiss":
          yield* dispatchGuestShare(command, events, effects);
 diff --git a/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts b/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
-index 0d428e1..990ce77 100644
+index 15ac7ec..b5f6c3a 100644
 --- a/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
 +++ b/apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts
 @@ -143,6 +143,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
@@ -439,10 +439,10 @@ index 0d428e1..990ce77 100644
      case "thread.settle":
      case "thread.auto-settle":
 diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/components/chat/GuestShareControls.tsx
-index 797cb0e..f43454a 100644
+index e8b34d9..370c6ed 100644
 --- a/apps/web/src/components/chat/GuestShareControls.tsx
 +++ b/apps/web/src/components/chat/GuestShareControls.tsx
-@@ -24,6 +24,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
+@@ -25,6 +25,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
  import { cn } from "~/lib/utils";
  import { useOrchestrationCommand } from "~/state/use-orchestration-command";
  import { Button } from "../ui/button";
@@ -450,7 +450,7 @@ index 797cb0e..f43454a 100644
  import {
    Dialog,
    DialogDescription,
-@@ -77,14 +78,34 @@ function GuestShareDialog({
+@@ -79,6 +80,10 @@ function GuestShareDialog({
    const createGuestShare = useAtomCommand(serverEnvironment.createGuestShare, {
      reportFailure: false,
    });
@@ -458,7 +458,12 @@ index 797cb0e..f43454a 100644
 +    label: "update guest share",
 +  });
 +  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
-   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "guest link" });
+   const { copyToClipboard, isCopied } = useCopyToClipboard({
+     target: {
+       target: "guest link",
+@@ -87,12 +92,28 @@ function GuestShareDialog({
+     },
+   });
    const [state, setState] = useState<CreateState>({ status: "idle" });
 +  // Only used before a share exists; an active share carries its own setting.
 +  const [createAutoApprove, setCreateAutoApprove] = useState(false);
@@ -486,53 +491,62 @@ index 797cb0e..f43454a 100644
      });
      if (result._tag === "Success") {
        setState({ status: "created", url: result.value.url });
-@@ -113,10 +134,27 @@ function GuestShareDialog({
-           <DialogTitle>Share with guest</DialogTitle>
+@@ -124,11 +145,33 @@ function GuestShareDialog({
            <DialogDescription>
-             The guest sees the thread as you do, including command output and the agent&apos;s
--            reasoning. Each message they send waits for you.
-+            reasoning.{" "}
+             <T>
+               The guest sees the thread as you do, including command output and the agent&apos;s
+-              reasoning. Each message they send waits for you.
+-            </T>
++              reasoning.
++            </T>{" "}
 +            {autoApprove
-+              ? "Their messages go straight to the agent."
-+              : "Each message they send waits for you."}
++              ? gt("Their messages go straight to the agent.")
++              : gt("Each message they send waits for you.")}
            </DialogDescription>
          </DialogHeader>
          <DialogPanel>
 +          <div className="mb-4 flex items-start justify-between gap-4">
 +            <div className="flex flex-col gap-0.5">
-+              <span className="text-sm">Send guest messages without approval</span>
++              <span className="text-sm">
++                <T>Send guest messages without approval</T>
++              </span>
 +              <span className="text-muted-foreground text-xs">
-+                Off by default. While on, every message the guest sends reaches the agent at once.
++                <T>
++                  Off by default. While on, every message the guest sends reaches the agent at
++                  once.
++                </T>
 +              </span>
 +            </div>
 +            <Switch
 +              checked={autoApprove}
 +              disabled={shareExpired || (activeShare === null ? !canCreate : !canOperate)}
-+              aria-label="Send guest messages without approval"
++              aria-label={gt("Send guest messages without approval")}
 +              onCheckedChange={(next) => void toggleAutoApprove(next)}
 +            />
 +          </div>
            {state.status === "created" ? (
              <div className="flex items-center gap-2">
                <Input
-@@ -137,6 +175,12 @@ function GuestShareDialog({
-                 : "The link works once and expires in 24 hours."}
+@@ -149,6 +192,14 @@ function GuestShareDialog({
+                 : gt("The link works once and expires in 24 hours.")}
              </p>
            )}
 +          {state.status === "created" && state.url.startsWith("http://") ? (
 +            <p className="text-muted-foreground mt-2 text-xs">
-+              The guest must be on this machine&apos;s network. This link uses plain HTTP, so share
-+              it only on a network you trust.
++              <T>
++                The guest must be on this machine&apos;s network. This link uses plain HTTP, so
++                share it only on a network you trust.
++              </T>
 +            </p>
 +          ) : null}
            {state.status === "failed" ? (
              <p role="alert" className="text-destructive text-xs">
                {state.message}
 diff --git a/apps/web/src/components/chat/guestShareAvailability.ts b/apps/web/src/components/chat/guestShareAvailability.ts
-index 4e5c8a7..1b8aebf 100644
+index 0d6e751..0ed8d65 100644
 --- a/apps/web/src/components/chat/guestShareAvailability.ts
 +++ b/apps/web/src/components/chat/guestShareAvailability.ts
-@@ -7,7 +7,8 @@ import { serverEnvironment } from "~/state/server";
+@@ -8,7 +8,8 @@ import { serverEnvironment } from "~/state/server";
  /**
   * Whether this environment offers "Share with guest": the user may create links there, and its
   * Guest links beta is on (Settings > Labs). The server refuses links while the beta is off.
@@ -542,7 +556,7 @@ index 4e5c8a7..1b8aebf 100644
   */
  export const canShareWithGuestAtom = Atom.family((environmentId: EnvironmentId) =>
    Atom.make((get) => {
-@@ -15,7 +16,7 @@ export const canShareWithGuestAtom = Atom.family((environmentId: EnvironmentId)
+@@ -16,7 +17,7 @@ export const canShareWithGuestAtom = Atom.family((environmentId: EnvironmentId)
      return (
        get(serverEnvironment.createGuestShare.permissionAtom(environmentId)) &&
        serverConfig?.settings.guestSharingEnabled === true &&
@@ -552,11 +566,11 @@ index 4e5c8a7..1b8aebf 100644
    }).pipe(Atom.withLabel(`guest-share:available:${environmentId}`)),
  );
 diff --git a/apps/web/src/components/settings/LabsSettingsPanel.tsx b/apps/web/src/components/settings/LabsSettingsPanel.tsx
-index 38be7d6..cdc766a 100644
+index 2934359..74923c0 100644
 --- a/apps/web/src/components/settings/LabsSettingsPanel.tsx
 +++ b/apps/web/src/components/settings/LabsSettingsPanel.tsx
-@@ -99,24 +99,25 @@ function GuestLinksRow() {
-   const updateSettings = useUpdateScopedSettings();
+@@ -116,24 +116,25 @@ function GuestLinksRow() {
+   const messages = useMessages();
    const scope = useOptionalSettingsScope();
    const primaryPolicy = usePrimaryManagedPolicy();
 -  // Guests arrive through T3 Connect, so a policy that turns Connect off turns this off too.
@@ -566,8 +580,8 @@ index 38be7d6..cdc766a 100644
      scope
        ? scope.connectedEnvironments.map((environment) => environment.serverConfig?.managedPolicy)
        : [primaryPolicy],
--    (policy) => managedCapabilityDenial(policy, "connect"),
-+    (policy) => managedCapabilityDenial(policy, "remoteClients"),
+-    (policy) => managedCapabilityDenial(policy, "connect", messages),
++    (policy) => managedCapabilityDenial(policy, "remoteClients", messages),
    );
    return (
      <SettingsRow
@@ -579,7 +593,7 @@ index 38be7d6..cdc766a 100644
 +      // Turning guest links off still works without remote clients.
 +      managed={settings.guestSharingEnabled ? undefined : remoteDenial}
        description={
-         <>
+         <T>
            Share a thread with a guest who watches it live in a browser and sends messages you
 -          approve. Needs T3 Connect: sign in and link this machine in{" "}
 +          approve. The link opens on your local network, or through T3 Connect when this machine is
@@ -588,23 +602,25 @@ index 38be7d6..cdc766a 100644
              Sharing & access
            </Link>
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index 1686b3e..e70fd81 100644
+index 6dbc10b..41ace91 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
-@@ -508,7 +508,7 @@ export const SETTINGS_SEARCH_ITEMS = [
-     title: "Guest links",
+@@ -536,7 +536,9 @@ export const SETTINGS_SEARCH_ITEMS = [
+     title: msg("Guest links"),
      to: "/settings/labs",
      scope: "environment",
--    searchTerms: ["beta share guest invite link teammate watch t3 connect tunnel"],
-+    searchTerms: ["beta share guest invite link teammate watch local network lan t3 connect tunnel"],
+-    searchTerms: [msg("beta share guest invite link teammate watch t3 connect tunnel")],
++    searchTerms: [
++      msg("beta share guest invite link teammate watch local network lan t3 connect tunnel"),
++    ],
    },
    {
      id: "linked-environments-beta",
 diff --git a/packages/client-runtime/src/operations/commands.ts b/packages/client-runtime/src/operations/commands.ts
-index 50717d0..6845a4d 100644
+index 3c8f905..c9729c3 100644
 --- a/packages/client-runtime/src/operations/commands.ts
 +++ b/packages/client-runtime/src/operations/commands.ts
-@@ -517,6 +517,21 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
+@@ -523,6 +523,21 @@ export const closeGuestShare = Effect.fn("EnvironmentCommands.closeGuestShare")(
    return yield* simpleThreadCommand("thread.guest-share.close", input);
  });
  
@@ -627,10 +643,10 @@ index 50717d0..6845a4d 100644
    readonly guestMessageId: GuestMessageId;
    readonly decision: "send" | "dismiss";
 diff --git a/packages/client-runtime/src/state/threadCommands.ts b/packages/client-runtime/src/state/threadCommands.ts
-index 0e9de03..cad91d5 100644
+index 9f2edf5..ddb5693 100644
 --- a/packages/client-runtime/src/state/threadCommands.ts
 +++ b/packages/client-runtime/src/state/threadCommands.ts
-@@ -27,6 +27,7 @@ import {
+@@ -26,6 +26,7 @@ import {
    archiveThread,
    closeGuestShare,
    resolveGuestMessage,
@@ -638,7 +654,7 @@ index 0e9de03..cad91d5 100644
    cancelQueuedRun,
    createThread,
    deleteThread,
-@@ -178,6 +179,12 @@ export function createThreadEnvironmentAtoms<R, E>(
+@@ -180,6 +181,12 @@ export function createThreadEnvironmentAtoms<R, E>(
        scheduler,
        concurrency,
      }),
@@ -729,10 +745,10 @@ index 715a837..5d42ec4 100644
        "read_failed",
        "changed",
 diff --git a/packages/contracts/src/orchestrationV2.ts b/packages/contracts/src/orchestrationV2.ts
-index 38d2e98..5ee1af0 100644
+index 573607a..0b12ae4 100644
 --- a/packages/contracts/src/orchestrationV2.ts
 +++ b/packages/contracts/src/orchestrationV2.ts
-@@ -3137,6 +3137,12 @@ export const OrchestrationV2Command = Schema.Union([
+@@ -3187,6 +3187,12 @@ export const OrchestrationV2Command = Schema.Union([
      commandId: CommandId,
      threadId: ThreadId,
    }),
@@ -745,7 +761,7 @@ index 38d2e98..5ee1af0 100644
    Schema.Struct({
      type: Schema.Literal("thread.guest-message.dismiss"),
      commandId: CommandId,
-@@ -3589,6 +3595,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
+@@ -3660,6 +3666,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
      shareId: GuestShareId,
      host: TrimmedNonEmptyString,
      expiresAt: IsoDateTime,
