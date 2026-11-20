@@ -26,7 +26,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve upstream tag
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       should_build: ${{ steps.resolve.outputs.should_build }}
@@ -105,7 +105,7 @@ jobs:
     name: Publish release
     needs: [resolve, build]
     if: needs.resolve.outputs.should_build == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write
@@ -233,7 +233,7 @@ jobs:
     name: Close resolved drift issues
     needs: [resolve, release]
     if: needs.resolve.outputs.should_build == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write
