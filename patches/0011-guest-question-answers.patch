@@ -1,0 +1,1256 @@
+diff --git a/apps/server/src/guest/GuestShareService.test.ts b/apps/server/src/guest/GuestShareService.test.ts
+index 32b7414d23..5bd8ad8802 100644
+--- a/apps/server/src/guest/GuestShareService.test.ts
++++ b/apps/server/src/guest/GuestShareService.test.ts
+@@ -8,12 +8,15 @@ import {
+   GuestShareId,
+   type GuestStreamEvent,
+   MessageId,
++  NodeId,
+   type OrchestrationV2ThreadHistoryPage,
+   type OrchestrationV2TurnItem,
+   ProjectId,
+   ProviderDriverKind,
+   ProviderInstanceId,
++  ProviderSessionId,
+   RunId,
++  RuntimeRequestId,
+   type ServerDirectEndpoint,
+   ThreadId,
+   TurnItemId,
+@@ -200,6 +203,126 @@ const shareThreadFor = Effect.fn(function* (threadId: ThreadId, overLan = false)
+ });
+ const shareThread = shareThreadFor(threadId);
+ 
++/** Seeds the projection the way a provider's ask-questions request reaches the thread. */
++const seedPendingRequest = Effect.fn(function* (input: {
++  readonly threadId: ThreadId;
++  readonly requestId: RuntimeRequestId;
++  readonly kind: "user_input" | "command";
++  readonly ordinal?: number;
++}) {
++  const projections = yield* ProjectionStore.ProjectionStoreV2;
++  const now = yield* DateTime.now;
++  const nodeId = NodeId.make(`node:${input.requestId}`);
++  const sessionId = ProviderSessionId.make(`session:${input.requestId}`);
++  yield* projections.apply({
++    id: EventId.make(`attach:${input.requestId}`),
++    type: "provider-session.attached",
++    threadId: input.threadId,
++    occurredAt: now,
++    payload: {
++      id: sessionId,
++      driver: ProviderDriverKind.make("codex"),
++      providerInstanceId: instanceId,
++      status: "ready",
++      cwd: "/repo",
++      model: "gpt-5.1-codex",
++      capabilities: CodexProviderCapabilitiesV2,
++      createdAt: now,
++      updatedAt: now,
++      lastError: null,
++    },
++  });
++  yield* projections.apply({
++    id: EventId.make(`request:${input.requestId}`),
++    type: "runtime-request.updated",
++    threadId: input.threadId,
++    occurredAt: now,
++    payload: {
++      id: input.requestId,
++      nodeId,
++      providerTurnId: null,
++      nativeRequestRef: null,
++      kind: input.kind,
++      status: "pending",
++      responseCapability: { type: "live", providerSessionId: sessionId },
++      createdAt: now,
++      resolvedAt: null,
++    },
++  });
++  yield* projections.apply({
++    id: EventId.make(`node:${input.requestId}`),
++    type: "node.updated",
++    threadId: input.threadId,
++    occurredAt: now,
++    payload: {
++      id: nodeId,
++      threadId: input.threadId,
++      runId: null,
++      parentNodeId: null,
++      rootNodeId: nodeId,
++      kind: input.kind === "user_input" ? "user_input_request" : "approval_request",
++      status: "waiting",
++      countsForRun: false,
++      providerThreadId: null,
++      providerTurnId: null,
++      nativeItemRef: null,
++      runtimeRequestId: input.requestId,
++      checkpointScopeId: null,
++      startedAt: now,
++      completedAt: null,
++    },
++  });
++  const itemBase = {
++    id: TurnItemId.make(`item:${input.requestId}`),
++    threadId: input.threadId,
++    runId: null,
++    nodeId,
++    providerThreadId: null,
++    providerTurnId: null,
++    nativeItemRef: null,
++    parentItemId: null,
++    ordinal: input.ordinal ?? 1,
++    status: "waiting" as const,
++    title: null,
++    startedAt: now,
++    completedAt: null,
++    updatedAt: now,
++  };
++  const item: OrchestrationV2TurnItem =
++    input.kind === "user_input"
++      ? {
++          ...itemBase,
++          type: "user_input_request",
++          requestId: input.requestId,
++          questions: [
++            {
++              id: "style",
++              header: "Formatting",
++              question: "Which style should this use?",
++              options: [
++                { label: "Tabs", description: "Tabs", value: "tabs" },
++                { label: "Spaces", description: "Spaces", value: "spaces" },
++              ],
++              allowCustomAnswer: false,
++            },
++          ],
++        }
++      : {
++          ...itemBase,
++          type: "approval_request",
++          requestId: input.requestId,
++          requestKind: "command" as const,
++        };
++  yield* projections.apply({
++    id: EventId.make(`item:${input.requestId}`),
++    type: "turn-item.updated",
++    threadId: input.threadId,
++    occurredAt: now,
++    payload: item,
++  });
++  return projections;
++});
++
+ it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
+   Effect.gen(function* () {
+     const { orchestrator, guestShares, credential } = yield* shareThread;
+@@ -306,6 +429,70 @@ it.effect("starts a stream with the runs and items already in the thread", () =>
+   }).pipe(Effect.provide(layerTest)),
+ );
+ 
++it.effect("answers the agent's pending question as the guest", () =>
++  Effect.gen(function* () {
++    const { guestShares, credential } = yield* shareThread;
++    const { token: session, shareId } = yield* guestShares.redeem({ credential, name: "Sam" });
++    const requestId = RuntimeRequestId.make("request:guest-answer");
++    const projections = yield* seedPendingRequest({ threadId, requestId, kind: "user_input" });
++
++    const stale = yield* Effect.flip(
++      guestShares.answer(session, {
++        shareId: GuestShareId.make("share:other"),
++        requestId,
++        answers: { style: "tabs" },
++      }),
++    );
++    assert.equal(stale.reason, "stale_page");
++
++    yield* guestShares.answer(session, { shareId, requestId, answers: { style: "tabs" } });
++
++    const request = yield* projections.getRuntimeRequest(threadId, requestId);
++    assert.equal(request?.status, "resolved");
++    assert.deepEqual(request?.answers, { style: "tabs" });
++    // The same answer is closed for a second submission from a stale page.
++    const second = yield* Effect.flip(
++      guestShares.answer(session, { shareId, requestId, answers: { style: "spaces" } }),
++    );
++    assert.equal(second.reason, "closed");
++  }).pipe(Effect.provide(layerTest)),
++);
++
++it.effect("refuses answers the question did not offer, and never answers an approval", () =>
++  Effect.gen(function* () {
++    const { guestShares, credential } = yield* shareThread;
++    const { token: session, shareId } = yield* guestShares.redeem({ credential, name: "Sam" });
++    const questionId = RuntimeRequestId.make("request:guest-question");
++    const projections = yield* seedPendingRequest({
++      threadId,
++      requestId: questionId,
++      kind: "user_input",
++    });
++
++    const rejected = yield* Effect.flip(
++      guestShares.answer(session, {
++        shareId,
++        requestId: questionId,
++        answers: { style: "double" },
++      }),
++    );
++    assert.equal(rejected.reason, "rejected");
++    assert.equal((yield* projections.getRuntimeRequest(threadId, questionId))?.status, "pending");
++
++    const approvalId = RuntimeRequestId.make("request:guest-approval");
++    yield* seedPendingRequest({ threadId, requestId: approvalId, kind: "command", ordinal: 2 });
++    const unavailable = yield* Effect.flip(
++      guestShares.answer(session, {
++        shareId,
++        requestId: approvalId,
++        answers: { style: "tabs" },
++      }),
++    );
++    assert.equal(unavailable.reason, "unavailable");
++    assert.equal((yield* projections.getRuntimeRequest(threadId, approvalId))?.status, "pending");
++  }).pipe(Effect.provide(layerTest)),
++);
++
+ it.effect("redeems only a short invite whose signature and share id are both current", () =>
+   Effect.gen(function* () {
+     const { guestShares, credential: replaced } = yield* shareThread;
+diff --git a/apps/server/src/guest/GuestShareService.ts b/apps/server/src/guest/GuestShareService.ts
+index f538f748e4..7266aa2304 100644
+--- a/apps/server/src/guest/GuestShareService.ts
++++ b/apps/server/src/guest/GuestShareService.ts
+@@ -9,6 +9,7 @@ import {
+   type GuestShareCreateResult,
+   GuestShareId,
+   guestShareAutoApproves,
++  type GuestAnswerRequest,
+   type GuestRedeemRequest,
+   type GuestStreamEvent,
+   type GuestSubmitRequest,
+@@ -62,6 +63,7 @@ import * as DocumentText from "../provider/DocumentText.ts";
+ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+ import * as ServerSettings from "../serverSettings.ts";
+ import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
++import { guestAnswersMatchQuestions } from "./guestAnswers.ts";
+ import { guestShareView, guestThreadModel } from "./guestView.ts";
+ import {
+   classifyGuestUploads,
+@@ -100,6 +102,7 @@ const GUEST_ACCESS_MESSAGES = {
+   ...GUEST_FAILURE,
+   invalid: "This guest link is not valid.",
+   stale_page: "This page is for an older guest link. Reload it to continue.",
++  closed: "This question is no longer waiting for an answer.",
+   unavailable: "This item is not available.",
+   rejected: "The owner's server rejected this request.",
+   empty: "Write a message or attach a file.",
+@@ -119,6 +122,7 @@ export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessEr
+       "used",
+       "busy",
+       "stale_page",
++      "closed",
+       "unavailable",
+       "rejected",
+       "empty",
+@@ -176,6 +180,11 @@ export class GuestShareService extends Context.Service<
+       request: GuestSubmitRequest,
+       uploads: ReadonlyArray<GuestUpload>,
+     ) => Effect.Effect<void, GuestShareAccessError>;
++    /** Answers the agent's pending ask-questions request with the guest's choices. */
++    readonly answer: (
++      session: string,
++      request: GuestAnswerRequest,
++    ) => Effect.Effect<void, GuestShareAccessError>;
+     readonly stream: (
+       session: string,
+     ) => Effect.Effect<Stream.Stream<GuestStreamEvent>, GuestShareAccessError>;
+@@ -555,6 +564,56 @@ const make = Effect.gen(function* () {
+     });
+   });
+ 
++  // An answer goes straight to the provider, as an auto-approved guest message would: the agent
++  // is blocked on the question, and the owner shared the thread with this guest on purpose.
++  // Approvals are deliberately excluded; those stay the owner's to give.
++  const answer = Effect.fn("GuestShareService.answer")(function* (
++    session: string,
++    request: GuestAnswerRequest,
++  ) {
++    const { thread, share } = yield* authorize(session, "session");
++    if (request.shareId !== share.id) {
++      return yield* new GuestShareAccessError({ reason: "stale_page" });
++    }
++    const projection = yield* orchestrator
++      .getThreadProjection(thread.id)
++      .pipe(Effect.mapError(() => inactive));
++    const runtimeRequest = projection.runtimeRequests.find(
++      (candidate) => candidate.id === request.requestId,
++    );
++    if (runtimeRequest === undefined || runtimeRequest.status !== "pending") {
++      return yield* new GuestShareAccessError({ reason: "closed" });
++    }
++    // Only the agent's questions, never an approval: those stay the owner's to give.
++    if (
++      runtimeRequest.kind !== "user_input" ||
++      runtimeRequest.responseCapability.type === "not_resumable"
++    ) {
++      return yield* new GuestShareAccessError({ reason: "unavailable" });
++    }
++    const questionItem = projection.turnItems.findLast(
++      (item) => item.type === "user_input_request" && item.requestId === request.requestId,
++    );
++    if (
++      questionItem === undefined ||
++      questionItem.type !== "user_input_request" ||
++      questionItem.questionAnswer !== undefined
++    ) {
++      return yield* new GuestShareAccessError({ reason: "closed" });
++    }
++    if (!guestAnswersMatchQuestions(questionItem.questions, request.answers)) {
++      return yield* new GuestShareAccessError({ reason: "rejected" });
++    }
++    yield* dispatchGuestCommand({
++      type: "runtime-request.respond",
++      commandId: yield* commandId("answer"),
++      threadId: thread.id,
++      requestId: request.requestId,
++      answers: request.answers,
++    });
++    yield* analytics.record("feature.used", { feature: "guest_answer.submit" });
++  });
++
+   /** Completes once the session no longer opens its share, so open reads end with it. */
+   const untilRevoked = (session: string) =>
+     authorize(session, "session").pipe(
+@@ -846,6 +905,7 @@ const make = Effect.gen(function* () {
+     redeem,
+     check,
+     submit,
++    answer,
+     stream,
+     render,
+     item,
+diff --git a/apps/server/src/guest/guestAnswers.test.ts b/apps/server/src/guest/guestAnswers.test.ts
+new file mode 100644
+index 0000000000..74f4178c1a
+--- /dev/null
++++ b/apps/server/src/guest/guestAnswers.test.ts
+@@ -0,0 +1,71 @@
++import { describe, expect, it } from "vite-plus/test";
++
++import { guestAnswersMatchQuestions } from "./guestAnswers.ts";
++
++const single = {
++  id: "style",
++  options: [
++    { label: "Tabs", description: "Tabs", value: "tabs" },
++    { label: "Spaces", description: "Spaces", value: "spaces" },
++  ],
++};
++const multi = {
++  id: "checks",
++  options: [
++    { label: "Typecheck", description: "Typecheck", value: "typecheck" },
++    { label: "Tests", description: "Tests", value: "tests" },
++  ],
++  multiSelect: true,
++};
++
++describe("guestAnswersMatchQuestions", () => {
++  it("accepts an offered option and a question's own text", () => {
++    expect(guestAnswersMatchQuestions([single], { style: "tabs" })).toBe(true);
++    expect(guestAnswersMatchQuestions([single], { style: "Two spaces, please" })).toBe(true);
++  });
++
++  it("accepts several offered options only for a multi-select question", () => {
++    expect(guestAnswersMatchQuestions([multi], { checks: ["typecheck", "tests"] })).toBe(true);
++    expect(guestAnswersMatchQuestions([single], { style: ["tabs", "spaces"] })).toBe(false);
++    expect(guestAnswersMatchQuestions([multi], { checks: [] })).toBe(false);
++    expect(guestAnswersMatchQuestions([multi], { checks: ["tests", "tests"] })).toBe(false);
++    expect(guestAnswersMatchQuestions([multi], { checks: ["deploy"] })).toBe(false);
++  });
++
++  it("refuses a value the question did not offer when custom answers are off", () => {
++    expect(
++      guestAnswersMatchQuestions([{ ...single, allowCustomAnswer: false }], {
++        style: "anything",
++      }),
++    ).toBe(false);
++  });
++
++  it("requires every question and no extra answers", () => {
++    expect(guestAnswersMatchQuestions([single, multi], { style: "tabs" })).toBe(false);
++    expect(
++      guestAnswersMatchQuestions([single], { style: "tabs", extra: "surprise" }),
++    ).toBe(false);
++  });
++
++  it("allows an empty answer only for an optional question without options", () => {
++    const optional = { id: "notes", options: [], required: false };
++    expect(guestAnswersMatchQuestions([optional], { notes: "" })).toBe(true);
++    expect(
++      guestAnswersMatchQuestions([{ ...optional, options: single.options }], { notes: "" }),
++    ).toBe(false);
++  });
++
++  it("accepts an offered empty option and an empty seeded initial answer", () => {
++    const emptyOption = {
++      id: "input",
++      options: [{ label: "Submit empty value", description: "Send empty", value: "" }],
++    };
++    expect(guestAnswersMatchQuestions([emptyOption], { input: "" })).toBe(true);
++
++    const editor = { id: "message", options: [], initialAnswer: "" };
++    expect(guestAnswersMatchQuestions([editor], { message: "" })).toBe(true);
++    expect(
++      guestAnswersMatchQuestions([{ ...editor, allowCustomAnswer: false }], { message: "" }),
++    ).toBe(false);
++  });
++});
+diff --git a/apps/server/src/guest/guestAnswers.ts b/apps/server/src/guest/guestAnswers.ts
+new file mode 100644
+index 0000000000..751c6c3382
+--- /dev/null
++++ b/apps/server/src/guest/guestAnswers.ts
+@@ -0,0 +1,49 @@
++import type { GuestInputAnswers, OrchestrationV2UserInputQuestion } from "@t3tools/contracts";
++
++type AnswerableQuestion = Pick<
++  OrchestrationV2UserInputQuestion,
++  "id" | "options" | "multiSelect" | "allowCustomAnswer" | "initialAnswer" | "required"
++>;
++
++/**
++ * Whether a guest's answers fit the questions the agent asked: every question answered, no extra
++ * keys, offered options preserved exactly, and custom text only where the question allows it.
++ * The guest page builds answers the same way the owner's composer does; this keeps a hand-written
++ * request from putting arbitrary text or option values in front of the provider.
++ */
++export function guestAnswersMatchQuestions(
++  questions: ReadonlyArray<AnswerableQuestion>,
++  answers: GuestInputAnswers,
++): boolean {
++  const questionIds = new Set(questions.map((question) => question.id));
++  if (Object.keys(answers).length !== questionIds.size) return false;
++
++  for (const question of questions) {
++    if (!Object.hasOwn(answers, question.id)) return false;
++    const answer = answers[question.id];
++    const isOffered = (value: string) =>
++      question.options.some(
++        (option) =>
++          option.value === value || (option.value === undefined && option.label === value),
++      );
++
++    if (Array.isArray(answer)) {
++      if (question.multiSelect !== true || answer.length === 0) return false;
++      if (new Set(answer).size !== answer.length) return false;
++      if (!answer.every((value) => isOffered(value))) return false;
++      continue;
++    }
++    if (typeof answer !== "string") return false;
++    if (isOffered(answer)) continue;
++    if (answer === "") {
++      // The client sends "" for an editor seeded with an empty initial answer, and for an
++      // optional question with no options.
++      if (question.initialAnswer !== undefined && question.allowCustomAnswer !== false) continue;
++      if (question.required === false && question.options.length === 0) continue;
++      return false;
++    }
++    if (question.allowCustomAnswer === false) return false;
++  }
++
++  return true;
++}
+diff --git a/apps/server/src/guest/http.ts b/apps/server/src/guest/http.ts
+index 008666369e..7d27bcf3c6 100644
+--- a/apps/server/src/guest/http.ts
++++ b/apps/server/src/guest/http.ts
+@@ -1,4 +1,5 @@
+ import {
++  GUEST_ANSWER_ROUTE,
+   GUEST_ATTACHMENT_ROUTE,
+   GUEST_COMMAND_OUTPUT_ROUTE,
+   GUEST_HISTORY_ROUTE,
+@@ -10,6 +11,7 @@ import {
+   GUEST_MESSAGE_MAX_ATTACHMENT_BYTES,
+   GUEST_MESSAGE_MAX_ATTACHMENTS,
+   GUEST_SHARE_TTL_MS,
++  GuestAnswerRequest,
+   GuestRedeemRequest,
+   GuestStreamEvent,
+   GuestSubmitRequest,
+@@ -46,6 +48,7 @@ const FILE_HEADERS = {
+ 
+ const decodeRedeem = Schema.decodeUnknownEffect(GuestRedeemRequest);
+ const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
++const decodeAnswer = Schema.decodeUnknownEffect(GuestAnswerRequest);
+ // The owner's thread types hold DateTime values; the JSON codec writes them as strings.
+ const encodeStreamEvent = Schema.encodeEffect(
+   Schema.fromJsonString(Schema.toCodecJson(GuestStreamEvent)),
+@@ -233,6 +236,23 @@ const submitRoute = HttpRouter.add(
+   ),
+ );
+ 
++const answerRoute = HttpRouter.add(
++  "POST",
++  GUEST_ANSWER_ROUTE,
++  Effect.gen(function* () {
++    const request = yield* HttpServerRequest.HttpServerRequest;
++    const shareId = requestedShareId(request);
++    const session = sessionFor(request, shareId);
++    const guestShares = yield* GuestShareService;
++    // The session is checked before the body is read, as with a message.
++    yield* guestShares.check(session);
++    const body = yield* readJson.pipe(Effect.flatMap(decodeAnswer), Effect.option);
++    if (body._tag === "None" || body.value.shareId !== shareId) return yield* badRequest;
++    yield* guestShares.answer(session, body.value);
++    return HttpServerResponse.empty({ status: 204, headers: NO_STORE });
++  }).pipe(Effect.catchTags({ GuestShareAccessError: errorResponse })),
++);
++
+ const streamRoute = HttpRouter.add(
+   "GET",
+   `${GUEST_ROUTE_PREFIX}/stream`,
+@@ -389,6 +409,7 @@ export const layer = Layer.mergeAll(
+   redeemRoute,
+   sessionRoute,
+   submitRoute,
++  answerRoute,
+   streamRoute,
+   renderRoute,
+   itemRoute,
+diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/components/chat/GuestShareControls.tsx
+index 370c6ed9f2..cfd51a11ab 100644
+--- a/apps/web/src/components/chat/GuestShareControls.tsx
++++ b/apps/web/src/components/chat/GuestShareControls.tsx
+@@ -149,7 +149,8 @@ function GuestShareDialog({
+             </T>{" "}
+             {autoApprove
+               ? gt("Their messages go straight to the agent.")
+-              : gt("Each message they send waits for you.")}
++              : gt("Each message they send waits for you.")}{" "}
++            {gt("They can answer the agent's questions directly.")}
+           </DialogDescription>
+         </DialogHeader>
+         <DialogPanel>
+diff --git a/apps/web/src/components/guest/GuestPage.browser.test.tsx b/apps/web/src/components/guest/GuestPage.browser.test.tsx
+index 6abab1cb01..5c13fbfbb1 100644
+--- a/apps/web/src/components/guest/GuestPage.browser.test.tsx
++++ b/apps/web/src/components/guest/GuestPage.browser.test.tsx
+@@ -3,14 +3,19 @@ import {
+   GUEST_COMMAND_OUTPUT_ROUTE,
+   GUEST_RENDER_ROUTE,
+   GuestMessageId,
++  GUEST_ANSWER_ROUTE,
+   GuestShareId,
+   GuestStreamEvent,
+   MessageId,
++  NodeId,
+   ProviderDriverKind,
++  ProviderSessionId,
+   RunId,
++  RuntimeRequestId,
+   TurnItemId,
+   type GuestShareView,
+   type OrchestrationV2Run,
++  type OrchestrationV2RuntimeRequest,
+   type OrchestrationV2TurnItem,
+ } from "@t3tools/contracts";
+ import * as DateTime from "effect/DateTime";
+@@ -119,6 +124,7 @@ const view: GuestShareView = {
+ const opening = (
+   runs: ReadonlyArray<OrchestrationV2Run>,
+   turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
++  runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest> = [],
+ ): ReadonlyArray<GuestStreamEvent> => [
+   { type: "view", view },
+   {
+@@ -130,6 +136,7 @@ const opening = (
+         ...fixture,
+         runs,
+         turnItems,
++        runtimeRequests,
+         visibleTurnItems: turnItems.map((item, position) => ({
+           position,
+           visibility: "local",
+@@ -249,6 +256,88 @@ describe("GuestPage", () => {
+     await expect.element(screen.getByLabelText("Model: GPT-5.4")).toBeVisible();
+   });
+ 
++  it("shows the agent's question and sends the guest's answer", async () => {
++    using _page = visit(`/guest?share=${SHARE_ID}`);
++    using fetchSpy = vi
++      .spyOn(window, "fetch")
++      .mockImplementation(async () => new Response(null, { status: 204 }));
++    const requestId = RuntimeRequestId.make("question-1");
++    const questionItem: OrchestrationV2TurnItem = {
++      ...itemBase("question", 4),
++      status: "waiting",
++      completedAt: null,
++      type: "user_input_request",
++      requestId,
++      questions: [
++        {
++          id: "style",
++          header: "Formatting",
++          question: "Which style should this use?",
++          options: [
++            { label: "Tabs", description: "Tabs", value: "tabs" },
++            { label: "Spaces", description: "Spaces", value: "spaces" },
++          ],
++          allowCustomAnswer: false,
++        },
++        {
++          id: "checks",
++          header: "Checks",
++          question: "Which checks should run?",
++          options: [
++            { label: "Typecheck", description: "Typecheck", value: "typecheck" },
++            { label: "Tests", description: "Tests", value: "tests" },
++          ],
++          multiSelect: true,
++          allowCustomAnswer: false,
++        },
++      ],
++    };
++    const request: OrchestrationV2RuntimeRequest = {
++      id: requestId,
++      nodeId: NodeId.make("node-question"),
++      providerTurnId: null,
++      nativeRequestRef: null,
++      kind: "user_input",
++      status: "pending",
++      responseCapability: {
++        type: "live",
++        providerSessionId: ProviderSessionId.make("session-1"),
++      },
++      createdAt: started,
++      resolvedAt: null,
++    };
++    using _stream = vi
++      .spyOn(window, "EventSource")
++      .mockImplementation(
++        fakeEventSource(
++          opening([run("run-1", 1, "running")], [questionItem], [request]),
++        ) as never,
++      );
++    await using screen = await render(<GuestPage />);
++
++    // The owner's composer shows this card too; the guest gets the same options.
++    const card = screen.getByRole("region", { name: "Ask a question" });
++    await expect.element(card.getByText("Which style should this use?")).toBeVisible();
++    await userEvent.click(card.getByRole("radio", { name: /Tabs/ }));
++    await userEvent.click(card.getByRole("button", { name: "Next" }));
++    await expect.element(card.getByText("Which checks should run?")).toBeVisible();
++    await userEvent.click(card.getByRole("checkbox", { name: /Typecheck/ }));
++    await userEvent.click(card.getByRole("checkbox", { name: /Tests/ }));
++    await userEvent.click(card.getByRole("button", { name: "Send" }));
++
++    await vi.waitFor(() => {
++      const call = fetchSpy.mock.calls.find(([url]) =>
++        String(url).startsWith(GUEST_ANSWER_ROUTE),
++      );
++      expect(call).toBeDefined();
++      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
++        shareId: SHARE_ID,
++        requestId,
++        answers: { style: "tabs", checks: ["typecheck", "tests"] },
++      });
++    });
++  });
++
+   it("sends attached files with the message, as form data", async () => {
+     using _page = visit(`/guest?share=${SHARE_ID}`);
+     using fetchSpy = vi
+diff --git a/apps/web/src/components/guest/GuestPage.tsx b/apps/web/src/components/guest/GuestPage.tsx
+index bf870dcb4b..02d5724998 100644
+--- a/apps/web/src/components/guest/GuestPage.tsx
++++ b/apps/web/src/components/guest/GuestPage.tsx
+@@ -6,7 +6,6 @@ import {
+   GUEST_ROUTE_PREFIX,
+   GUEST_SHARE_PARAM,
+   GuestMessageId,
+-  type GuestRedeemRequest,
+   type GuestShareView,
+   type GuestThreadModel,
+   OrchestrationV2ThreadHistoryPage,
+@@ -23,10 +22,14 @@ import {
+   deriveThreadActivityRun,
+   deriveThreadStructureRuntime,
+ } from "@t3tools/client-runtime/state/thread-execution";
+-import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/thread-requests";
++import {
++  createQuestionHistoryProjector,
++  derivePendingThreadRequests,
++} from "@t3tools/client-runtime/state/thread-requests";
+ import { ArrowUpIcon, PaperclipIcon, XIcon } from "lucide-react";
+ import {
+   useEffect,
++  useMemo,
+   useReducer,
+   useRef,
+   useState,
+@@ -43,7 +46,11 @@ import { useNowMinute } from "~/hooks/useNowMinute";
+ import { useStableCallback } from "~/hooks/useStableCallback";
+ import { useTheme } from "~/hooks/useTheme";
+ import { cn } from "~/lib/utils";
+-import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
++import {
++  deriveActiveWorkStartedAt,
++  derivePendingUserInputs,
++  derivePhase,
++} from "~/session-logic";
+ import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
+ import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
+ import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
+@@ -57,6 +64,8 @@ import { ScrollToEndButton } from "../chat/TimelineOverlays";
+ import type { TimelineRow } from "../chat/timelineRowContext";
+ import { useTimelineFollow } from "../chat/useTimelineFollow";
+ import { GuestHtmlRender } from "./GuestHtmlRender";
++import { GuestQuestionCard } from "./GuestQuestionCard";
++import { decodeErrorBody, postGuest } from "./guestRequests";
+ import { Button } from "../ui/button";
+ import { Input } from "../ui/input";
+ import {
+@@ -134,7 +143,6 @@ function takeGuestEntry(): GuestEntry {
+   return capturedEntry;
+ }
+ 
+-const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
+ const decodeHistoryPage = Schema.decodeUnknownOption(
+   Schema.toCodecJson(OrchestrationV2ThreadHistoryPage),
+ );
+@@ -162,33 +170,6 @@ async function fetchGuestHistoryPage(
+   }
+ }
+ 
+-/** Resolves to null on success, or to a message the guest can read. */
+-async function postGuest(
+-  path: "redeem" | `messages?${string}`,
+-  body: typeof GuestRedeemRequest.Encoded | FormData,
+-): Promise<string | null> {
+-  try {
+-    const response = await fetch(
+-      `${GUEST_ROUTE_PREFIX}/${path}`,
+-      body instanceof FormData
+-        ? { method: "POST", body }
+-        : {
+-            method: "POST",
+-            headers: { "content-type": "application/json" },
+-            body: JSON.stringify(body),
+-          },
+-    );
+-    if (response.ok) return null;
+-    const json: unknown = await response.json().catch(() => null);
+-    return Option.match(decodeErrorBody(json), {
+-      onNone: () => m(msg("Something went wrong. Try again.")),
+-      onSome: ({ message }) => message,
+-    });
+-  } catch {
+-    return m(msg("Could not reach the server."));
+-  }
+-}
+-
+ const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
+   pending: msg("Waiting for approval"),
+   sent: msg("Sent", { $context: "message status" }),
+@@ -436,6 +417,17 @@ function GuestThread({
+   const threadKey = `guest-${shareId}`;
+   const listRef = useRef<LegendListRef | null>(null);
+   const { resolvedTheme } = useTheme();
++  // The agent's pending question, shown above the composer as it is for the owner. A request
++  // the provider can no longer answer is left out: there is nothing the guest could send.
++  const pendingQuestion = useMemo(
++    () =>
++      derivePendingUserInputs(
++        derivePendingThreadRequests(projection).userInputs.filter(
++          (prompt) => prompt.responseCapability !== "not_resumable",
++        ),
++      )[0] ?? null,
++    [projection],
++  );
+   // The rest is what ChatView derives from the same projection.
+   const [projectQuestionHistory] = useState(() => createQuestionHistoryProjector());
+   const items = projectQuestionHistory(projection);
+@@ -548,6 +540,16 @@ function GuestThread({
+         ) : null}
+       </div>
+       <div className={cn(LANE, "shrink-0 pb-4")}>
++        <HostImageUrlContext value={hostImageUrl}>
++          {pendingQuestion === null ? null : (
++            <GuestQuestionCard
++              key={pendingQuestion.requestId}
++              shareId={shareId}
++              prompt={pendingQuestion}
++              onAnswered={() => follow.scrollToEnd(true)}
++            />
++          )}
++        </HostImageUrlContext>
+         <GuestComposer shareId={shareId} model={model} onSent={() => follow.scrollToEnd(true)} />
+       </div>
+     </>
+diff --git a/apps/web/src/components/guest/GuestQuestionCard.tsx b/apps/web/src/components/guest/GuestQuestionCard.tsx
+new file mode 100644
+index 0000000000..1940c85f2f
+--- /dev/null
++++ b/apps/web/src/components/guest/GuestQuestionCard.tsx
+@@ -0,0 +1,246 @@
++import {
++  GUEST_MESSAGE_MAX_LENGTH,
++  GUEST_SHARE_PARAM,
++  type GuestAnswerRequest,
++  type GuestShareView,
++} from "@t3tools/contracts";
++import {
++  buildPendingUserInputAnswers,
++  setPendingUserInputCustomAnswer,
++  togglePendingUserInputOptionSelection,
++  type PendingUserInputDraftAnswer,
++} from "@t3tools/client-runtime/state/pending-user-input";
++import {
++  seedUserInputDraftAnswers,
++  type ThreadPendingUserInput,
++} from "@t3tools/client-runtime/state/thread-requests";
++import { msg, T, useGT, useMessages } from "gt-react";
++import { useState } from "react";
++
++import { cn } from "~/lib/utils";
++import { derivePendingUserInputProgress } from "~/pendingUserInput";
++import { markdownProseDirection, textDirection } from "~/textDirection";
++import ChatMarkdown from "../ChatMarkdown";
++import { Button } from "../ui/button";
++import { postGuest } from "./guestRequests";
++
++/**
++ * The agent's ask-questions prompt, answered as the guest. The owner's composer shows the same
++ * request; whoever answers first resolves it for both. Unlike a guest message, an answer goes
++ * straight to the provider, because the agent is blocked until someone answers.
++ */
++export function GuestQuestionCard({
++  shareId,
++  prompt,
++  onAnswered,
++}: {
++  readonly shareId: GuestShareView["shareId"];
++  readonly prompt: ThreadPendingUserInput;
++  readonly onAnswered: () => void;
++}) {
++  const gt = useGT();
++  const m = useMessages();
++  const [drafts, setDrafts] = useState<Record<string, PendingUserInputDraftAnswer>>(() =>
++    seedUserInputDraftAnswers(prompt.questions, {}),
++  );
++  const [questionIndex, setQuestionIndex] = useState(0);
++  const [sending, setSending] = useState(false);
++  const [answered, setAnswered] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const progress = derivePendingUserInputProgress(prompt.questions, drafts, questionIndex);
++  const question = progress.activeQuestion;
++  const answers = buildPendingUserInputAnswers(prompt.questions, drafts);
++  if (question === null) return null;
++  const isLastQuestion = progress.isLastQuestion;
++  const questionDirection = markdownProseDirection(
++    [
++      question.header,
++      question.question,
++      ...question.options.flatMap((option) => [option.label, option.description ?? ""]),
++    ].join(" "),
++  );
++  const questionTextAlign = questionDirection === "rtl" ? "text-right" : "text-left";
++
++  const selectOption = (optionValue: string) => {
++    if (sending || answered) return;
++    setError(null);
++    setDrafts((current) => ({
++      ...current,
++      [question.id]: togglePendingUserInputOptionSelection(
++        question,
++        current[question.id],
++        optionValue,
++      ),
++    }));
++  };
++  const setCustomAnswer = (customAnswer: string) => {
++    if (sending || answered) return;
++    setError(null);
++    setDrafts((current) => ({
++      ...current,
++      [question.id]: setPendingUserInputCustomAnswer(question, current[question.id], customAnswer),
++    }));
++  };
++  const submit = async () => {
++    if (sending || answered) return;
++    if (!isLastQuestion) {
++      setQuestionIndex(questionIndex + 1);
++      return;
++    }
++    if (answers === null) return;
++    setSending(true);
++    const failure = await postGuest(
++      `answers?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
++      { shareId, requestId: prompt.requestId, answers } satisfies GuestAnswerRequest,
++    );
++    setSending(false);
++    if (failure === null) {
++      setAnswered(true);
++      onAnswered();
++    } else {
++      setError(failure);
++    }
++  };
++
++  return (
++    <section
++      aria-label={gt("Ask a question")}
++      aria-busy={sending}
++      dir={questionDirection}
++      className="mb-2 flex flex-col gap-2 rounded-2xl border border-border bg-card px-4 py-3 shadow-composer dark:shadow-composer-dark"
++    >
++      <div className="flex items-baseline gap-2">
++        <p
++          className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground"
++          dir={textDirection(question.header)}
++        >
++          {question.header}
++        </p>
++        {prompt.questions.length > 1 ? (
++          <span className="shrink-0 text-2xs text-muted-foreground tabular-nums">
++            {questionIndex + 1}/{prompt.questions.length}
++          </span>
++        ) : null}
++      </div>
++      <ChatMarkdown
++        text={question.question}
++        cwd={undefined}
++        lineBreaks
++        className={cn(
++          "text-sm text-foreground [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
++          questionTextAlign,
++        )}
++      />
++      <div
++        role={question.multiSelect ? "group" : "radiogroup"}
++        aria-label={question.header}
++        className="flex flex-col gap-0.5"
++      >
++        {question.options.map((option, index) => {
++          const optionValue = option.value ?? option.label;
++          const selected =
++            progress.customAnswer.trim() === "" &&
++            progress.selectedOptionValues.includes(optionValue);
++          return (
++            <div key={`${question.id}:${index}:${optionValue}`}>
++              <button
++                type="button"
++                role={question.multiSelect ? "checkbox" : "radio"}
++                aria-checked={selected}
++                disabled={sending || answered}
++                onClick={() => selectOption(optionValue)}
++                className={cn(
++                  "flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
++                  selected ? "text-foreground" : "text-foreground/70 hover:bg-muted/30",
++                  (sending || answered) && "cursor-not-allowed opacity-50",
++                )}
++              >
++                <span
++                  aria-hidden
++                  className={cn(
++                    "mt-0.5 flex size-4 shrink-0 items-center justify-center border",
++                    question.multiSelect ? "rounded-sm" : "rounded-full",
++                    selected ? "border-primary bg-primary" : "border-foreground/40",
++                  )}
++                >
++                  {selected ? (
++                    <span
++                      className={cn(
++                        "bg-primary-foreground",
++                        question.multiSelect ? "size-2 rounded-[1px]" : "size-1.5 rounded-full",
++                      )}
++                    />
++                  ) : null}
++                </span>
++                <span className="min-w-0 flex-1">
++                  <span className="block text-sm font-medium" dir={textDirection(option.label)}>
++                    {option.label}
++                  </span>
++                  {option.description && option.description !== option.label ? (
++                    <span
++                      className="block text-xs text-muted-foreground"
++                      dir={textDirection(option.description)}
++                    >
++                      {option.description}
++                    </span>
++                  ) : null}
++                </span>
++              </button>
++              {option.preview ? (
++                <ChatMarkdown
++                  text={option.preview}
++                  cwd={undefined}
++                  lineBreaks
++                  className="ps-8 pe-2 pb-1 text-xs text-foreground/70"
++                />
++              ) : null}
++            </div>
++          );
++        })}
++      </div>
++      {question.allowCustomAnswer === false ? null : (
++        <textarea
++          aria-label={gt("Type your answer")}
++          placeholder={gt("Type your answer")}
++          rows={1}
++          maxLength={GUEST_MESSAGE_MAX_LENGTH}
++          value={progress.customAnswer}
++          dir={questionDirection}
++          disabled={sending || answered}
++          onChange={(event) => setCustomAnswer(event.target.value)}
++          className="min-h-9 w-full resize-none rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none field-sizing-content placeholder:text-placeholder focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25 disabled:opacity-50"
++        />
++      )}
++      <div className="flex items-center gap-2">
++        {questionIndex > 0 ? (
++          <Button
++            size="sm"
++            variant="ghost-muted"
++            disabled={sending || answered}
++            onClick={() => setQuestionIndex(questionIndex - 1)}
++          >
++            <T>Back</T>
++          </Button>
++        ) : null}
++        <Button
++          size="sm"
++          disabled={
++            sending || answered || (isLastQuestion ? answers === null : !progress.canAdvance)
++          }
++          onClick={() => void submit()}
++        >
++          {isLastQuestion ? <T>Send</T> : <T>Next</T>}
++        </Button>
++        {answered ? (
++          <p className="text-xs text-muted-foreground">
++            {m(msg("Sent", { $context: "message status" }))}
++          </p>
++        ) : error === null ? null : (
++          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
++            {error}
++          </p>
++        )}
++      </div>
++    </section>
++  );
++}
+diff --git a/apps/web/src/components/guest/guestRequests.ts b/apps/web/src/components/guest/guestRequests.ts
+new file mode 100644
+index 0000000000..1ef80d30e9
+--- /dev/null
++++ b/apps/web/src/components/guest/guestRequests.ts
+@@ -0,0 +1,37 @@
++import { GUEST_ROUTE_PREFIX } from "@t3tools/contracts";
++import * as Option from "effect/Option";
++import * as Schema from "effect/Schema";
++import { msg } from "gt-react";
++
++import { m } from "~/i18n/messages";
++
++export const decodeErrorBody = Schema.decodeUnknownOption(
++  Schema.Struct({ message: Schema.String }),
++);
++
++/** Resolves to null on success, or to a message the guest can read. */
++export async function postGuest(
++  path: "redeem" | `messages?${string}` | `answers?${string}`,
++  body: object | FormData,
++): Promise<string | null> {
++  try {
++    const response = await fetch(
++      `${GUEST_ROUTE_PREFIX}/${path}`,
++      body instanceof FormData
++        ? { method: "POST", body }
++        : {
++            method: "POST",
++            headers: { "content-type": "application/json" },
++            body: JSON.stringify(body),
++          },
++    );
++    if (response.ok) return null;
++    const json: unknown = await response.json().catch(() => null);
++    return Option.match(decodeErrorBody(json), {
++      onNone: () => m(msg("Something went wrong. Try again.")),
++      onSome: ({ message }) => message,
++    });
++  } catch {
++    return m(msg("Could not reach the server."));
++  }
++}
+diff --git a/apps/web/src/i18n/translations/de.json b/apps/web/src/i18n/translations/de.json
+index 5439ee3968..8061c8a3be 100644
+--- a/apps/web/src/i18n/translations/de.json
++++ b/apps/web/src/i18n/translations/de.json
+@@ -3521,6 +3521,7 @@
+   "262955d6eb632f9b": "Die Zwischenablage-API ist beim Kopieren des Gast-Links nicht verfügbar.",
+   "f1a4f2b04cdbb4ef": "Der Gast-Link konnte nicht in die Zwischenablage kopiert werden.",
+   "cf3490a604e44d31": "Gastlink konnte nicht erstellt werden.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Gastlink",
+   "d26395a743d1d094": "Kopieren",
+   "f1ad2149da98d87b": "Ein neuer Link beendet den aktuellen.",
+diff --git a/apps/web/src/i18n/translations/en.json b/apps/web/src/i18n/translations/en.json
+index c378e66342..7782b0043d 100644
+--- a/apps/web/src/i18n/translations/en.json
++++ b/apps/web/src/i18n/translations/en.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "Clipboard API is unavailable while copying guest link.",
+   "f1a4f2b04cdbb4ef": "Failed to copy guest link to the clipboard.",
+   "cf3490a604e44d31": "Could not create a guest link.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Guest link",
+   "d26395a743d1d094": "Copy",
+   "f1ad2149da98d87b": "A new link ends the current one.",
+diff --git a/apps/web/src/i18n/translations/es.json b/apps/web/src/i18n/translations/es.json
+index 1538850527..8986030c7f 100644
+--- a/apps/web/src/i18n/translations/es.json
++++ b/apps/web/src/i18n/translations/es.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "La API del portapapeles no está disponible al copiar el enlace de invitado.",
+   "f1a4f2b04cdbb4ef": "No se pudo copiar el enlace de invitado al portapapeles.",
+   "cf3490a604e44d31": "No se pudo crear un enlace de invitado.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Enlace de invitado",
+   "d26395a743d1d094": "Copiar",
+   "f1ad2149da98d87b": "Un enlace nuevo invalida el actual.",
+diff --git a/apps/web/src/i18n/translations/fr.json b/apps/web/src/i18n/translations/fr.json
+index b9166940cc..beeb51cc45 100644
+--- a/apps/web/src/i18n/translations/fr.json
++++ b/apps/web/src/i18n/translations/fr.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "L’API Presse-papiers n’est pas disponible pour copier le lien invité.",
+   "f1a4f2b04cdbb4ef": "Impossible de copier le lien invité dans le presse-papiers.",
+   "cf3490a604e44d31": "Impossible de créer un lien invité.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Lien invité",
+   "d26395a743d1d094": "Copier",
+   "f1ad2149da98d87b": "Un nouveau lien remplace le lien actuel.",
+diff --git a/apps/web/src/i18n/translations/ja.json b/apps/web/src/i18n/translations/ja.json
+index da6a34749d..94bc0ac833 100644
+--- a/apps/web/src/i18n/translations/ja.json
++++ b/apps/web/src/i18n/translations/ja.json
+@@ -3516,6 +3516,7 @@
+   "262955d6eb632f9b": "ゲストリンクをコピーする際にクリップボード API を利用できませんでした。",
+   "f1a4f2b04cdbb4ef": "ゲストリンクをクリップボードにコピーできませんでした。",
+   "cf3490a604e44d31": "ゲストリンクを作成できませんでした。",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "ゲストリンク",
+   "d26395a743d1d094": "コピー",
+   "f1ad2149da98d87b": "新しいリンクを作成すると現在のリンクは無効になります。",
+diff --git a/apps/web/src/i18n/translations/ko.json b/apps/web/src/i18n/translations/ko.json
+index f38e81a9b9..fad8af999e 100644
+--- a/apps/web/src/i18n/translations/ko.json
++++ b/apps/web/src/i18n/translations/ko.json
+@@ -3516,6 +3516,7 @@
+   "262955d6eb632f9b": "게스트 링크를 복사하는 중 클립보드 API를 사용할 수 없습니다.",
+   "f1a4f2b04cdbb4ef": "게스트 링크를 클립보드에 복사하지 못했습니다.",
+   "cf3490a604e44d31": "게스트 링크를 만들 수 없습니다.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "게스트 링크",
+   "d26395a743d1d094": "복사",
+   "f1ad2149da98d87b": "새 링크를 만들면 현재 링크가 종료됩니다.",
+diff --git a/apps/web/src/i18n/translations/pt-BR.json b/apps/web/src/i18n/translations/pt-BR.json
+index 24ce6764ab..b76a28ade3 100644
+--- a/apps/web/src/i18n/translations/pt-BR.json
++++ b/apps/web/src/i18n/translations/pt-BR.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "A API da área de transferência não está disponível ao copiar o link de convidado.",
+   "f1a4f2b04cdbb4ef": "Falha ao copiar o link de convidado para a área de transferência.",
+   "cf3490a604e44d31": "Não foi possível criar um link de convidado.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Link de convidado",
+   "d26395a743d1d094": "Copiar",
+   "f1ad2149da98d87b": "Um novo link encerra o atual.",
+diff --git a/apps/web/src/i18n/translations/ru.json b/apps/web/src/i18n/translations/ru.json
+index a5f0c249e2..8a6c79c8b0 100644
+--- a/apps/web/src/i18n/translations/ru.json
++++ b/apps/web/src/i18n/translations/ru.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "API буфера обмена недоступен при копировании гостевой ссылки.",
+   "f1a4f2b04cdbb4ef": "Не удалось скопировать гостевую ссылку в буфер обмена.",
+   "cf3490a604e44d31": "Не удалось создать гостевую ссылку.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Гостевая ссылка",
+   "d26395a743d1d094": "Копировать",
+   "f1ad2149da98d87b": "Новая ссылка отменяет текущую.",
+diff --git a/apps/web/src/i18n/translations/sv.json b/apps/web/src/i18n/translations/sv.json
+index 353df28a8a..cfd196c98f 100644
+--- a/apps/web/src/i18n/translations/sv.json
++++ b/apps/web/src/i18n/translations/sv.json
+@@ -3520,6 +3520,7 @@
+   "262955d6eb632f9b": "Urklipps-API:t är inte tillgängligt vid kopiering av gästlänken.",
+   "f1a4f2b04cdbb4ef": "Kunde inte kopiera gästlänken till urklipp.",
+   "cf3490a604e44d31": "Kunde inte skapa en gästlänk.",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "Gästlänk",
+   "d26395a743d1d094": "Kopiera",
+   "f1ad2149da98d87b": "En ny länk avslutar den nuvarande.",
+diff --git a/apps/web/src/i18n/translations/zh.json b/apps/web/src/i18n/translations/zh.json
+index 4acdfc14e2..42f1c573a8 100644
+--- a/apps/web/src/i18n/translations/zh.json
++++ b/apps/web/src/i18n/translations/zh.json
+@@ -3525,6 +3525,7 @@
+   "262955d6eb632f9b": "复制访客链接时剪贴板 API 不可用。",
+   "f1a4f2b04cdbb4ef": "无法将访客链接复制到剪贴板。",
+   "cf3490a604e44d31": "无法创建访客链接。",
++  "3c081b8593dc46eb": "They can answer the agent's questions directly.",
+   "0c7f0973f205c143": "访客链接",
+   "d26395a743d1d094": "复制",
+   "f1ad2149da98d87b": "新链接会让当前链接失效。",
+diff --git a/packages/contracts/src/guestShare.ts b/packages/contracts/src/guestShare.ts
+index 5d42ec450c..b8bdf23600 100644
+--- a/packages/contracts/src/guestShare.ts
++++ b/packages/contracts/src/guestShare.ts
+@@ -5,6 +5,7 @@ import {
+   GuestMessageId,
+   GuestShareId,
+   IsoDateTime,
++  RuntimeRequestId,
+   ThreadId,
+   TrimmedNonEmptyString,
+   TrimmedString,
+@@ -135,6 +136,28 @@ export const GuestSubmitRequest = Schema.Struct({
+ });
+ export type GuestSubmitRequest = typeof GuestSubmitRequest.Type;
+ 
++/** One answer to an agent's question: an offered option's value, or the guest's own text. */
++const GuestInputAnswerValue = Schema.Union([
++  Schema.String.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH)),
++  Schema.Array(Schema.String.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH))),
++]);
++
++export const GuestInputAnswers = Schema.Record(Schema.String, GuestInputAnswerValue);
++export type GuestInputAnswers = typeof GuestInputAnswers.Type;
++
++/**
++ * A guest's answer to an agent's pending ask-questions request. It only carries the questions'
++ * answers; the server checks the request is still pending and that each answer is one the
++ * question offered.
++ */
++export const GuestAnswerRequest = Schema.Struct({
++  /** The share the page shows, so an answer from a page for a replaced link is refused. */
++  shareId: GuestShareId,
++  requestId: RuntimeRequestId,
++  answers: GuestInputAnswers,
++});
++export type GuestAnswerRequest = typeof GuestAnswerRequest.Type;
++
+ export const GUEST_ROUTE_PREFIX = "/api/guest";
+ /** The guest page and guest routes name the share they mean with this query parameter. */
+ export const GUEST_SHARE_PARAM = "share";
+@@ -155,6 +178,8 @@ export const GUEST_ITEM_ROUTE = `${GUEST_ROUTE_PREFIX}/item`;
+ export const GUEST_HISTORY_ROUTE = `${GUEST_ROUTE_PREFIX}/history`;
+ /** Server-sent output frames of one command in the shared thread: `?share=<share id>&item=<id>`. */
+ export const GUEST_COMMAND_OUTPUT_ROUTE = `${GUEST_ROUTE_PREFIX}/command-output`;
++/** Answers a pending ask-questions request: `?share=<share id>`, body is a `GuestAnswerRequest`. */
++export const GUEST_ANSWER_ROUTE = `${GUEST_ROUTE_PREFIX}/answers`;
+ /**
+  * A file in the shared thread or a guest's waiting message: `?share=<share id>&id=<attachment id>`.
+  * Images load inline; other files download.
