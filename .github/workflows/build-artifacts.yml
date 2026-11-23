@@ -230,7 +230,7 @@ jobs:
           ls -lh release-cli/
 
       - name: Upload CLI archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-linux-${{ matrix.arch }}
           path: upstream/release-cli/*
@@ -345,7 +345,7 @@ jobs:
         run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
 
       - name: Download Linux CLI archive for WSL
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cli-linux-x64
           path: upstream/release-cli
@@ -411,7 +411,7 @@ jobs:
           ls -lh artifact/
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: artifact/*
@@ -494,7 +494,7 @@ jobs:
           ls -lh artifact/
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-arm64
           path: artifact/*
@@ -572,7 +572,7 @@ jobs:
           cp "$apk" "artifact/t3code-unplugged-${{ inputs.version }}-android.apk"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android
           path: artifact/*.apk
@@ -633,7 +633,7 @@ jobs:
           ls -lh release-web/
 
       - name: Upload web client
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web
           path: upstream/release-web/*
