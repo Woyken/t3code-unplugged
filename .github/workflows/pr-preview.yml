@@ -45,7 +45,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve preview
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       eligible: ${{ steps.pr.outputs.eligible }}
@@ -179,7 +179,7 @@ jobs:
     name: Publish preview
     needs: [resolve, build]
     if: needs.resolve.outputs.eligible == 'true' && needs.build.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       # Demote the token for everything except this job: the build ran PR code.
