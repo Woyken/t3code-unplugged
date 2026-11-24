@@ -136,6 +136,13 @@ cache (one loose file per server module), so the patch skips it there too.
 Remove the patch if upstream starts generating the cache in its own Windows
 artifacts.
 
+`0012-azure-devops-pr-events.patch` lets watched Azure DevOps PRs trigger an
+immediate refresh via the PR page's SignalR feed. It uses the Entra login from
+`az login` on the T3 Code server, opens an outbound connection to Azure DevOps,
+and keeps the existing polling. PAT-only logins and unavailable feeds fall
+back to polling. The feed is undocumented and may change independently of the
+Azure DevOps REST API.
+
 ```
 ./scripts/apply-patches.sh /path/to/upstream-checkout
 ./scripts/verify-strip.sh /path/to/upstream-checkout

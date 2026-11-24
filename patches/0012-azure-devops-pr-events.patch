@@ -1,0 +1,477 @@
+diff --git a/apps/server/src/orchestration-v2/PullRequestWatchReactor.ts b/apps/server/src/orchestration-v2/PullRequestWatchReactor.ts
+index 7590ee3c..f1140ec6 100644
+--- a/apps/server/src/orchestration-v2/PullRequestWatchReactor.ts
++++ b/apps/server/src/orchestration-v2/PullRequestWatchReactor.ts
+@@ -625,12 +625,18 @@ export const make = Effect.gen(function* () {
+   const readGroup = Effect.fn("PullRequestWatchReactor.readGroup")(function* (
+     group: WatchGroup,
+     fingerprint: ProviderChangeRequestWatchFingerprint | null,
++    hostChanged: boolean,
+   ) {
+     const now = yield* Clock.currentTimeMillis;
+     const last = lastReads.get(group.key);
+-    const plan = planRead(group, last, fingerprint, now);
++    // A feed can report changes (including comment edits) the linked snapshot cannot see.
++    const forceRead = hostChanged && fingerprint === null;
++    const plan = forceRead
++      ? { detail: true, activity: true }
++      : planRead(group, last, fingerprint, now);
+     if (!plan.detail) return;
+     if (
++      forceRead ||
+       last === undefined ||
+       group.targets.some((target) => !last.watches.has(watchKey(target))) ||
+       (fingerprint !== null && last.remarks !== fingerprint.remarks)
+@@ -851,7 +857,7 @@ export const make = Effect.gen(function* () {
+             fingerprint === "paused"
+               ? endMergedSnapshots(group).pipe(Effect.asVoid)
+               : reads.withPermit(
+-                  readGroup(group, fingerprint).pipe(
++                  readGroup(group, fingerprint, changed !== undefined).pipe(
+                     Effect.catchCause(
+                       logFailure("pull request watch check failed", { pullRequest: group.key }),
+                     ),
+diff --git a/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestCli.ts b/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestCli.ts
+index 98d94953..bca02898 100644
+--- a/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestCli.ts
++++ b/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestCli.ts
+@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
+ import * as Layer from "effect/Layer";
+ import * as Result from "effect/Result";
+ import * as Schema from "effect/Schema";
++import * as Stream from "effect/Stream";
+ import type {
+   PullRequestAction,
+   PullRequestCheck,
+@@ -18,6 +19,7 @@ import { sortChecks } from "@t3tools/source-control-core/server/pullRequestCheck
+ 
+ import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+ import { blobContent, readBlobZip } from "./azureDevOpsBlobZip.ts";
++import { pullRequestEvents, pullRequestEventOrganization } from "./azureDevOpsPullRequestEvents.ts";
+ import {
+   decodeItemContentJson,
+   decodeIterationChangesJson,
+@@ -175,6 +177,10 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
+       readonly number: number;
+     }) => Effect.Effect<AzureDevOpsPullRequest, AzureDevOpsPullRequestCliError>;
+ 
++    readonly pullRequestEvents: (input: {
++      readonly cwd: string;
++      readonly pullRequest: AzureDevOpsPullRequest;
++    }) => Stream.Stream<void>;
+     readonly listPolicyChecks: (input: {
+       readonly cwd: string;
+       readonly number: number;
+@@ -590,6 +596,41 @@ export const make = Effect.gen(function* () {
+       );
+     }),
+ 
++    pullRequestEvents: ({ cwd, pullRequest }) => {
++      const organization = pullRequestEventOrganization(pullRequest.url);
++      const { eventLocation, number } = pullRequest;
++      if (organization === null || eventLocation === undefined) return Stream.empty;
++      return Stream.unwrap(
++        azure
++          .execute({
++            cwd,
++            args: [
++              "account",
++              "get-access-token",
++              "--resource",
++              "499b84ac-1321-427f-aa17-267ca6975798",
++              "--query",
++              "accessToken",
++              "--output",
++              "tsv",
++              "--only-show-errors",
++            ],
++            timeoutMs: 15_000,
++            maxOutputBytes: 16 * 1024,
++          })
++          .pipe(
++            Effect.map(({ stdout, stdoutTruncated, stdoutInvalidUtf8 }) => {
++              const token = stdout.trim();
++              return !stdoutTruncated && !stdoutInvalidUtf8 && token && !/\s/u.test(token)
++                ? pullRequestEvents({ organization, location: eventLocation, number, token })
++                : Stream.empty;
++            }),
++            // PAT-only and signed-out environments retain the existing polling behavior.
++            Effect.orElseSucceed(() => Stream.empty),
++          ),
++      );
++    },
++
+     listPolicyChecks: Effect.fn("AzureDevOpsPullRequestCli.listPolicyChecks")(function* (input) {
+       const unreadable = (cause: unknown) =>
+         new AzureDevOpsPullRequestReadError({
+diff --git a/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestProvider.ts b/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestProvider.ts
+index b329561c..3803de95 100644
+--- a/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestProvider.ts
++++ b/packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestProvider.ts
+@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
+ import * as Effect from "effect/Effect";
+ import * as Exit from "effect/Exit";
+ import * as Semaphore from "effect/Semaphore";
++import * as Stream from "effect/Stream";
+ import { rollupCheckStatuses } from "@t3tools/source-control-core/server/pullRequestChecks";
+ import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
+ 
+@@ -492,6 +493,14 @@ export const make = Effect.gen(function* () {
+       Effect.mapError(fail("getChangeRequest")),
+     ),
+ 
++    changeRequestEvents: (input) =>
++      Stream.unwrap(
++        readPullRequest(input).pipe(
++          Effect.map((pullRequest) => cli.pullRequestEvents({ cwd: input.cwd, pullRequest })),
++          Effect.orElseSucceed(() => Stream.empty),
++        ),
++      ),
++
+     getChangeRequestActivity: (input) =>
+       locationOf(input).pipe(
+         Effect.mapError(fail("getChangeRequestActivity")),
+diff --git a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.test.ts b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.test.ts
+new file mode 100644
+index 00000000..ae7d1843
+--- /dev/null
++++ b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.test.ts
+@@ -0,0 +1,105 @@
++import * as Effect from "effect/Effect";
++import * as Stream from "effect/Stream";
++import { afterEach, describe, expect, it, vi } from "vite-plus/test";
++
++import { pullRequestEvents, pullRequestEventOrganization } from "./azureDevOpsPullRequestEvents.ts";
++
++const input = {
++  organization: "https://dev.azure.com/example",
++  location: { project: "Project Name", repository: "repo-id" },
++  number: 42,
++  token: "mock-token",
++};
++
++function mockTransport(options: { rejectSubscription?: boolean } = {}) {
++  const request = vi.fn(async (url: string) => {
++    if (url.endsWith("/connectionData")) return Response.json({ instanceId: "instance" });
++    if (url.includes("/negotiate?")) {
++      return Response.json({ ConnectionToken: "connection", KeepAliveTimeout: 45 });
++    }
++    return Response.json({ Response: "started" });
++  });
++  const send = vi.fn();
++  const close = vi.fn();
++  class MockSocket extends EventTarget {
++    constructor(url: string, init: { headers: Record<string, string> }) {
++      super();
++      expect(url).toContain("wss://dev.azure.com/example/_apis/Project%20Name/signalr/connect?");
++      expect(init.headers.Authorization).toBe("Bearer mock-token");
++      queueMicrotask(() => this.frame({ S: 1 }));
++    }
++    frame(data: object) {
++      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) }));
++    }
++    send(data: string) {
++      send(JSON.parse(data));
++      this.frame({ I: "0", ...(options.rejectSubscription ? { E: "refused" } : {}) });
++      if (options.rejectSubscription) return;
++      // @effect-diagnostics-next-line globalTimers:off - Model a WebSocket message in a later task.
++      setTimeout(() => {
++        this.frame({});
++        this.frame({ M: [] });
++        this.frame({ M: [{ H: "pullrequestdetailhub", M: "OnDiscussionsUpdated" }] });
++        this.dispatchEvent(new Event("close"));
++      }, 0);
++    }
++    close() {
++      close();
++    }
++  }
++  vi.stubGlobal("fetch", request);
++  vi.stubGlobal("WebSocket", MockSocket);
++  return { request, send, close };
++}
++
++afterEach(() => vi.unstubAllGlobals());
++
++describe("Azure DevOps PR events", () => {
++  it("only accepts credential destinations on known Azure DevOps hosts", () => {
++    expect(
++      pullRequestEventOrganization("https://dev.azure.com/org/proj/_git/repo/pullrequest/42"),
++    ).toBe("https://dev.azure.com/org");
++    expect(
++      pullRequestEventOrganization("https://org.visualstudio.com/proj/_git/repo/pullrequest/42"),
++    ).toBe("https://org.visualstudio.com");
++    for (const url of [
++      "https://dev.azure.com.example.com/org/proj",
++      "http://dev.azure.com/org/proj",
++      "https://dev.azure.com:8443/org/proj",
++      "https://user@dev.azure.com/org/proj",
++      "not a URL",
++    ]) {
++      expect(pullRequestEventOrganization(url)).toBeNull();
++    }
++  });
++
++  it("signals once on subscription and once on an event, then closes", async () => {
++    const { request, send, close } = mockTransport();
++    const changes = await Effect.runPromise(Stream.runCollect(pullRequestEvents(input)));
++    expect(changes).toEqual([undefined, undefined]);
++    expect(request).toHaveBeenCalledTimes(3);
++    expect(request).toHaveBeenCalledWith(
++      expect.stringContaining("/negotiate?"),
++      expect.objectContaining({ redirect: "error" }),
++    );
++    expect(send).toHaveBeenCalledWith({
++      H: "pullrequestdetailhub",
++      M: "Subscribe",
++      A: [42, "repo-id"],
++      I: 0,
++    });
++    expect(close).toHaveBeenCalled();
++  });
++
++  it("ends without a signal when the subscription is refused", async () => {
++    const { close } = mockTransport({ rejectSubscription: true });
++    expect(await Effect.runPromise(Stream.runCollect(pullRequestEvents(input)))).toEqual([]);
++    expect(close).toHaveBeenCalled();
++  });
++
++  it("closes the socket when the reader stops", async () => {
++    const { close } = mockTransport();
++    await Effect.runPromise(Stream.runCollect(Stream.take(pullRequestEvents(input), 1)));
++    expect(close).toHaveBeenCalled();
++  });
++});
+diff --git a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.ts b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.ts
+new file mode 100644
+index 00000000..b9700478
+--- /dev/null
++++ b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestEvents.ts
+@@ -0,0 +1,143 @@
++// @effect-diagnostics globalFetch:off globalTimers:off - The native SignalR socket owns its HTTP handshake, abort signal, and deadlines.
++import * as Effect from "effect/Effect";
++import * as Queue from "effect/Queue";
++import * as Stream from "effect/Stream";
++
++import type { AzureDevOpsRepositoryLocation } from "./azureDevOpsPullRequestJson.ts";
++
++const HANDSHAKE_MS = 15_000;
++
++/** Only send the Entra token to Azure DevOps Services, never to links on arbitrary hosts. */
++export function pullRequestEventOrganization(pullRequestUrl: string): string | null {
++  const url = URL.parse(pullRequestUrl);
++  if (url === null || url.protocol !== "https:" || url.port || url.username || url.password) {
++    return null;
++  }
++  if (url.hostname === "dev.azure.com") {
++    const organization = url.pathname.split("/")[1];
++    return organization && /^[a-z\d][a-z\d-]*$/iu.test(organization)
++      ? `${url.origin}/${organization}`
++      : null;
++  }
++  return /^[a-z\d][a-z\d-]*\.visualstudio\.com$/iu.test(url.hostname) ? url.origin : null;
++}
++
++/**
++ * The PR page's private SignalR 1.5 hub. Events only invalidate reads; REST owns the PR state.
++ * End quietly on failure: the watch reactor keeps polling and retries ended feeds on its sweep.
++ */
++export const pullRequestEvents = (input: {
++  readonly organization: string;
++  readonly location: AzureDevOpsRepositoryLocation;
++  readonly number: number;
++  readonly token: string;
++}): Stream.Stream<void> =>
++  Stream.callback<void>(
++    (queue) =>
++      Effect.acquireRelease(
++        Effect.sync(() => {
++          const abort = new AbortController();
++          const headers = { Authorization: `Bearer ${input.token}` };
++          const base = `${input.organization}/_apis/${encodeURIComponent(input.location.project)}/signalr`;
++          let socket: WebSocket | undefined;
++          let timer: ReturnType<typeof setTimeout>;
++          const stop = () => {
++            if (abort.signal.aborted) return;
++            clearTimeout(timer);
++            abort.abort();
++            socket?.close();
++            Queue.endUnsafe(queue);
++          };
++          const expectFrameWithin = (ms: number) => {
++            clearTimeout(timer);
++            timer = setTimeout(stop, ms);
++          };
++          const json = async (url: string) => {
++            const response = await fetch(url, {
++              headers,
++              redirect: "error",
++              signal: abort.signal,
++            });
++            if (!response.ok) throw new Error("Azure DevOps event handshake rejected");
++            const value: unknown = await response.json();
++            if (value === null || typeof value !== "object" || Array.isArray(value)) {
++              throw new Error("Invalid Azure DevOps event handshake response");
++            }
++            return value as Record<string, unknown>;
++          };
++
++          expectFrameWithin(HANDSHAKE_MS);
++          void (async () => {
++            const { instanceId } = await json(`${input.organization}/_apis/connectionData`);
++            if (typeof instanceId !== "string" || !instanceId) return stop();
++            const query = new URLSearchParams({
++              clientProtocol: "1.5",
++              contextToken: instanceId,
++              connectionData: '[{"name":"pullrequestdetailhub"}]',
++            });
++            const { ConnectionToken, KeepAliveTimeout } = await json(`${base}/negotiate?${query}`);
++            if (typeof ConnectionToken !== "string" || !ConnectionToken || abort.signal.aborted) {
++              return stop();
++            }
++            query.set("transport", "webSockets");
++            query.set("connectionToken", ConnectionToken);
++            const keepAliveSec = typeof KeepAliveTimeout === "number" ? KeepAliveTimeout : 0;
++            const silenceMs = Math.min(180_000, Math.max(60_000, keepAliveSec * 1_500));
++            // Node's WebSocket supports upgrade headers; the DOM constructor type omits them.
++            const NodeWebSocket = WebSocket as unknown as new (
++              url: string,
++              options: { headers: Record<string, string> },
++            ) => WebSocket;
++            const connection = new NodeWebSocket(
++              `${base.replace(/^https:/u, "wss:")}/connect?${query}`,
++              {
++                headers,
++              },
++            );
++            socket = connection;
++            let phase: "init" | "start" | "subscribe" | "live" = "init";
++            connection.addEventListener("close", stop, { once: true });
++            connection.addEventListener("error", stop, { once: true });
++            connection.addEventListener("message", (event) => {
++              if (abort.signal.aborted || typeof event.data !== "string") return;
++              try {
++                if (phase === "live") expectFrameWithin(silenceMs);
++                const frame = JSON.parse(event.data);
++                if (frame === null || typeof frame !== "object") return;
++                if (phase === "init" && frame.S === 1) {
++                  phase = "start";
++                  void json(`${base}/start?${query}`)
++                    .then(({ Response }) => {
++                      if (abort.signal.aborted) return;
++                      if (Response !== "started") return stop();
++                      phase = "subscribe";
++                      connection.send(
++                        JSON.stringify({
++                          H: "pullrequestdetailhub",
++                          M: "Subscribe",
++                          A: [input.number, input.location.repository],
++                          I: 0,
++                        }),
++                      );
++                    })
++                    .catch(stop);
++                } else if (phase === "subscribe" && (frame.I === "0" || frame.I === 0)) {
++                  if (frame.E) return stop();
++                  phase = "live";
++                  expectFrameWithin(silenceMs);
++                  // Catch up on anything that happened while connecting or disconnected.
++                  Queue.offerUnsafe(queue, undefined);
++                } else if (phase === "live" && Array.isArray(frame.M) && frame.M.length > 0) {
++                  Queue.offerUnsafe(queue, undefined);
++                }
++              } catch {
++                stop();
++              }
++            });
++          })().catch(stop);
++          return stop;
++        }),
++        (stop) => Effect.sync(stop),
++      ),
++    { bufferSize: 1, strategy: "sliding" },
++  );
+diff --git a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.test.ts b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.test.ts
+index 48cc27b0..acca1780 100644
+--- a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.test.ts
++++ b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.test.ts
+@@ -66,6 +66,29 @@ describe("decodePullRequestListJson", () => {
+     });
+   });
+ 
++  it("keeps hub subscription IDs separate from the REST route names", () => {
++    const decoded = expectSuccess(
++      decodePullRequestJson(
++        asJson(
++          pullRequest({
++            repository: {
++              id: "repo-id",
++              name: "web",
++              project: { id: "project-id", name: "platform" },
++            },
++          }),
++        ),
++      ),
++    );
++    expect(decoded).toMatchObject({
++      location: { project: "platform", repository: "web" },
++      eventLocation: { project: "project-id", repository: "repo-id" },
++    });
++    const withoutIds = expectSuccess(decodePullRequestJson(asJson(pullRequest())));
++    expect(withoutIds).not.toBeNull();
++    expect(withoutIds?.eventLocation).toBeUndefined();
++  });
++
+   it("assembles a browser url when Azure reports no web link", () => {
+     const batch = expectSuccess(decodePullRequestListJson(asJson([pullRequest()])));
+ 
+diff --git a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.ts b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.ts
+index 40bdcf72..4694cbcd 100644
+--- a/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.ts
++++ b/packages/source-control-azure-devops/src/server/azureDevOpsPullRequestJson.ts
+@@ -58,10 +58,16 @@ const RawPullRequestSchema = Schema.Struct({
+   repository: Schema.optional(
+     Schema.NullOr(
+       Schema.Struct({
++        id: Schema.optional(Schema.NullOr(Schema.String)),
+         name: Schema.optional(Schema.NullOr(Schema.String)),
+         webUrl: Schema.optional(Schema.NullOr(Schema.String)),
+         project: Schema.optional(
+-          Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.NullOr(Schema.String)) })),
++          Schema.NullOr(
++            Schema.Struct({
++              id: Schema.optional(Schema.NullOr(Schema.String)),
++              name: Schema.optional(Schema.NullOr(Schema.String)),
++            }),
++          ),
+         ),
+       }),
+     ),
+@@ -165,6 +171,8 @@ export interface AzureDevOpsPullRequest {
+   readonly reviewers: ReadonlyArray<PullRequestActor>;
+   readonly labels: ReadonlyArray<PullRequestLabel>;
+   readonly location: AzureDevOpsRepositoryLocation | null;
++  /** Unlike the REST routes, the SignalR hub subscribes by project and repository ID. */
++  readonly eventLocation?: AzureDevOpsRepositoryLocation;
+   readonly autoMergeEnabled: boolean;
+   readonly autoMergeMethod?: PullRequestMergeMethod;
+ }
+@@ -258,6 +266,8 @@ function toPullRequest(
+   const headBranch = trimmed(normalizeRefName(raw.sourceRefName));
+   const baseBranch = trimmed(normalizeRefName(raw.targetRefName));
+   if (url === null || headBranch === null || baseBranch === null) return null;
++  const projectId = trimmed(raw.repository?.project?.id);
++  const repositoryId = trimmed(raw.repository?.id);
+   return {
+     number: raw.pullRequestId,
+     title: raw.title,
+@@ -276,6 +286,9 @@ function toPullRequest(
+     reviewers,
+     labels: toLabels(raw.labels),
+     location: toLocation(raw),
++    ...(projectId && repositoryId
++      ? { eventLocation: { project: projectId, repository: repositoryId } }
++      : {}),
+     autoMergeEnabled: (raw.autoCompleteSetBy ?? null) !== null,
+     ...(autoMergeMethod === undefined ? {} : { autoMergeMethod }),
+   };
