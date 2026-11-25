@@ -663,10 +663,10 @@ index 6abab1cb01..5c13fbfbb1 100644
      using _page = visit(`/guest?share=${SHARE_ID}`);
      using fetchSpy = vi
 diff --git a/apps/web/src/components/guest/GuestPage.tsx b/apps/web/src/components/guest/GuestPage.tsx
-index bf870dcb4b..02d5724998 100644
+index 9cc69049..829888dc 100644
 --- a/apps/web/src/components/guest/GuestPage.tsx
 +++ b/apps/web/src/components/guest/GuestPage.tsx
-@@ -6,7 +6,6 @@ import {
+@@ -5,7 +5,6 @@ import {
    GUEST_ROUTE_PREFIX,
    GUEST_SHARE_PARAM,
    GuestMessageId,
@@ -674,15 +674,11 @@ index bf870dcb4b..02d5724998 100644
    type GuestShareView,
    type GuestThreadModel,
    OrchestrationV2ThreadHistoryPage,
-@@ -23,10 +22,14 @@ import {
-   deriveThreadActivityRun,
-   deriveThreadStructureRuntime,
- } from "@t3tools/client-runtime/state/thread-execution";
--import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/thread-requests";
-+import {
-+  createQuestionHistoryProjector,
-+  derivePendingThreadRequests,
-+} from "@t3tools/client-runtime/state/thread-requests";
+@@ -16,9 +15,11 @@ import {
+ import * as Option from "effect/Option";
+ import * as Schema from "effect/Schema";
+ import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
++import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
  import { ArrowUpIcon, PaperclipIcon, XIcon } from "lucide-react";
  import {
    useEffect,
@@ -690,29 +686,24 @@ index bf870dcb4b..02d5724998 100644
    useReducer,
    useRef,
    useState,
-@@ -43,7 +46,11 @@ import { useNowMinute } from "~/hooks/useNowMinute";
+@@ -35,6 +36,7 @@ import { useNowMinute } from "~/hooks/useNowMinute";
  import { useStableCallback } from "~/hooks/useStableCallback";
  import { useTheme } from "~/hooks/useTheme";
  import { cn } from "~/lib/utils";
--import { deriveActiveWorkStartedAt, derivePhase } from "~/session-logic";
-+import {
-+  deriveActiveWorkStartedAt,
-+  derivePendingUserInputs,
-+  derivePhase,
-+} from "~/session-logic";
++import { derivePendingUserInputs } from "~/session-logic";
  import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
  import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
  import { GuestMessageAttachments } from "../chat/GuestMessageAttachments";
-@@ -57,6 +64,8 @@ import { ScrollToEndButton } from "../chat/TimelineOverlays";
+@@ -47,6 +49,8 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+ import { getDisplayModelName, getTriggerDisplayModelName } from "../chat/providerIconUtils";
  import type { TimelineRow } from "../chat/timelineRowContext";
- import { useTimelineFollow } from "../chat/useTimelineFollow";
  import { GuestHtmlRender } from "./GuestHtmlRender";
 +import { GuestQuestionCard } from "./GuestQuestionCard";
 +import { decodeErrorBody, postGuest } from "./guestRequests";
  import { Button } from "../ui/button";
  import { Input } from "../ui/input";
  import {
-@@ -134,7 +143,6 @@ function takeGuestEntry(): GuestEntry {
+@@ -124,7 +128,6 @@ function takeGuestEntry(): GuestEntry {
    return capturedEntry;
  }
  
@@ -720,7 +711,7 @@ index bf870dcb4b..02d5724998 100644
  const decodeHistoryPage = Schema.decodeUnknownOption(
    Schema.toCodecJson(OrchestrationV2ThreadHistoryPage),
  );
-@@ -162,33 +170,6 @@ async function fetchGuestHistoryPage(
+@@ -152,33 +155,6 @@ async function fetchGuestHistoryPage(
    }
  }
  
@@ -754,10 +745,10 @@ index bf870dcb4b..02d5724998 100644
  const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
    pending: msg("Waiting for approval"),
    sent: msg("Sent", { $context: "message status" }),
-@@ -436,6 +417,17 @@ function GuestThread({
-   const threadKey = `guest-${shareId}`;
-   const listRef = useRef<LegendListRef | null>(null);
-   const { resolvedTheme } = useTheme();
+@@ -420,6 +396,17 @@ function GuestThread({
+     openInNewTab(guestAttachmentUrl(shareId, file.id)),
+   );
+   const hostImageUrl = useStableCallback((path: string) => guestMediaUrl(shareId, path));
 +  // The agent's pending question, shown above the composer as it is for the owner. A request
 +  // the provider can no longer answer is left out: there is nothing the guest could send.
 +  const pendingQuestion = useMemo(
@@ -769,26 +760,26 @@ index bf870dcb4b..02d5724998 100644
 +      )[0] ?? null,
 +    [projection],
 +  );
-   // The rest is what ChatView derives from the same projection.
-   const [projectQuestionHistory] = useState(() => createQuestionHistoryProjector());
-   const items = projectQuestionHistory(projection);
-@@ -548,6 +540,16 @@ function GuestThread({
-         ) : null}
-       </div>
-       <div className={cn(LANE, "shrink-0 pb-4")}>
-+        <HostImageUrlContext value={hostImageUrl}>
-+          {pendingQuestion === null ? null : (
-+            <GuestQuestionCard
-+              key={pendingQuestion.requestId}
-+              shareId={shareId}
-+              prompt={pendingQuestion}
-+              onAnswered={() => follow.scrollToEnd(true)}
-+            />
-+          )}
-+        </HostImageUrlContext>
-         <GuestComposer shareId={shareId} model={model} onSent={() => follow.scrollToEnd(true)} />
-       </div>
-     </>
+   const renderHtmlRender = useStableCallback(
+     (row: Extract<TimelineRow, { kind: "html-render" }>) => (
+       <GuestHtmlRender itemId={row.id} reference={row.htmlRender} shareId={shareId} />
+@@ -457,6 +444,16 @@ function GuestThread({
+         >
+           {({ scrollToEnd }) => (
+             <div className={cn(LANE, "shrink-0 pb-4")}>
++              <HostImageUrlContext value={hostImageUrl}>
++                {pendingQuestion === null ? null : (
++                  <GuestQuestionCard
++                    key={pendingQuestion.requestId}
++                    shareId={shareId}
++                    prompt={pendingQuestion}
++                    onAnswered={scrollToEnd}
++                  />
++                )}
++              </HostImageUrlContext>
+               <GuestComposer shareId={shareId} model={model} onSent={scrollToEnd} />
+             </div>
+           )}
 diff --git a/apps/web/src/components/guest/GuestQuestionCard.tsx b/apps/web/src/components/guest/GuestQuestionCard.tsx
 new file mode 100644
 index 0000000000..1940c85f2f

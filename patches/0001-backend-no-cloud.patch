@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/binCli.ts b/apps/server/src/binCli.ts
-index 995b207e..7861e7ed 100644
+index 2ae78f27..161ee838 100644
 --- a/apps/server/src/binCli.ts
 +++ b/apps/server/src/binCli.ts
 @@ -5,7 +5,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -19,7 +19,7 @@ index 995b207e..7861e7ed 100644
  import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outboundHttp.ts";
  import { sharedServerCommandFlags } from "./cli/config.ts";
  import { projectCommand } from "./cli/project.ts";
-@@ -39,35 +38,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+@@ -41,35 +40,11 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
  import { themeCommand } from "./cli/theme.ts";
  import { traceCommand } from "./cli/trace.ts";
  import { triageCommand } from "./cli/triage.ts";
@@ -57,7 +57,7 @@ index 995b207e..7861e7ed 100644
    Command.make("t3", { ...sharedServerCommandFlags }).pipe(
      Command.withDescription(
        "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
-@@ -113,7 +88,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
+@@ -117,7 +92,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
        doctorCommand,
        policyCommand,
        triageCommand,
@@ -66,10 +66,10 @@ index 995b207e..7861e7ed 100644
    );
  
 diff --git a/apps/server/src/cli/connect.test.ts b/apps/server/src/cli/connect.test.ts
-index 4fbec456..6693d214 100644
+index 630fe7cb..6693d214 100644
 --- a/apps/server/src/cli/connect.test.ts
 +++ b/apps/server/src/cli/connect.test.ts
-@@ -1,29 +1,9 @@
+@@ -1,34 +1,9 @@
 -// @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises the Node HTTP boundary.
 -import * as NodeHttp from "node:http";
 -
@@ -91,6 +91,11 @@ index 4fbec456..6693d214 100644
 -import { makeCli } from "../binCli.ts";
 -import { CLOUD_CLI_DESIRED_LINK_SECRET } from "../cloud/CliState.ts";
 -import {
+-  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+-  CLOUD_LINKED_USER_ID,
+-  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
+-} from "../cloud/config.ts";
+-import {
 -  makePersistedServerRuntimeState,
 -  persistServerRuntimeState,
 -} from "../serverRuntimeState.ts";
@@ -99,7 +104,7 @@ index 4fbec456..6693d214 100644
  
  const managedExecutable = {
    status: "available",
-@@ -60,185 +40,3 @@ it.effect("does not install the relay client when the user declines the managed
+@@ -65,216 +40,3 @@ it.effect("does not install the relay client when the user declines the managed
      assert.equal(installCalls, 0);
    }),
  );
@@ -147,6 +152,8 @@ index 4fbec456..6693d214 100644
 -        readonly portFreed?: boolean;
 -        readonly command?: "unlink" | "status";
 -        readonly linkMode?: "managed" | "publish_only";
+-        /** Linked from desktop, web, or mobile: no CLI-desired link is stored. */
+-        readonly linkedByApp?: boolean;
 -      },
 -    ) =>
 -      Effect.gen(function* () {
@@ -186,10 +193,25 @@ index 4fbec456..6693d214 100644
 -        if (options?.command === "status") {
 -          // Status asks the server for reachability only for a managed link.
 -          yield* fs.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
--          yield* fs.writeFileString(
--            `${baseDir}/userdata/secrets/${CLOUD_CLI_DESIRED_LINK_SECRET}.bin`,
--            options.linkMode ?? "managed",
--          );
+-          yield* options.linkedByApp
+-            ? Effect.all([
+-                fs.writeFileString(
+-                  `${baseDir}/userdata/secrets/${CLOUD_LINKED_USER_ID}.bin`,
+-                  "user_app_linked",
+-                ),
+-                fs.writeFileString(
+-                  `${baseDir}/userdata/secrets/${CLOUD_ENDPOINT_RUNTIME_CONFIG}.bin`,
+-                  "{}",
+-                ),
+-                fs.writeFileString(
+-                  `${baseDir}/userdata/secrets/${RELAY_ENVIRONMENT_CREDENTIAL_SECRET}.bin`,
+-                  "relay_credential",
+-                ),
+-              ])
+-            : fs.writeFileString(
+-                `${baseDir}/userdata/secrets/${CLOUD_CLI_DESIRED_LINK_SECRET}.bin`,
+-                options.linkMode ?? "managed",
+-              );
 -        }
 -
 -        yield* Command.runWith(makeCli({ cloudEnabled: true }), { version: "0.0.0" })([
@@ -262,6 +284,20 @@ index 4fbec456..6693d214 100644
 -      }),
 -    );
 -
+-    it.effect("status checks reachability for an environment linked from the app", () =>
+-      Effect.gen(function* () {
+-        const { requests, printed } = yield* runConnect(process.pid, {
+-          command: "status",
+-          linkedByApp: true,
+-        });
+-
+-        assert.deepEqual(requests, ["POST /api/connect/reachability"]);
+-        assert.notInclude(printed, "Exposure: disabled");
+-        assert.notInclude(printed, "Authorization: missing");
+-        assert.notInclude(printed, "Next:");
+-      }),
+-    );
+-
 -    it.effect("status does not report a publish-only link as exposed", () =>
 -      Effect.gen(function* () {
 -        const { printed } = yield* runConnect(process.pid, {
@@ -285,6 +321,19 @@ index 4fbec456..6693d214 100644
 -    );
 -  },
 -);
+diff --git a/apps/server/src/cli/feedback.test.ts b/apps/server/src/cli/feedback.test.ts
+index b5625050..d55912a8 100644
+--- a/apps/server/src/cli/feedback.test.ts
++++ b/apps/server/src/cli/feedback.test.ts
+@@ -53,7 +53,7 @@ const listedPaths = (command: Command.Command.Any, path: string): ReadonlyArray<
+ 
+ it("feedback subjects name every listed t3 command", () => {
+   expect([...T3_CLI_COMMANDS].sort()).toEqual(
+-    [...listedPaths(makeCli({ cloudEnabled: true }), "t3")].sort(),
++    [...listedPaths(makeCli(), "t3")].sort(),
+   );
+ });
+ 
 diff --git a/apps/server/src/cloud/config.ts b/apps/server/src/cloud/config.ts
 index 5dac9e2d..0e4de119 100644
 --- a/apps/server/src/cloud/config.ts
@@ -375,26 +424,23 @@ index 85ffbbb0..8f13f8e5 100644
 +// unreachable.
 +export const hasCloudPublicConfig: boolean = false;
 diff --git a/apps/server/src/cloud/relayTracing.test.ts b/apps/server/src/cloud/relayTracing.test.ts
-index 34fcaa74..e987f7f4 100644
+index 3d75fd61..7c4893b5 100644
 --- a/apps/server/src/cloud/relayTracing.test.ts
 +++ b/apps/server/src/cloud/relayTracing.test.ts
-@@ -14,10 +14,11 @@ import { relayLayer } from "./relayTracing.ts";
+@@ -13,17 +13,18 @@ import { allowedFor, relayLayer } from "./relayTracing.ts";
  const tracesTo = (policy?: ManagedPolicyDocument) =>
    Effect.service(RelayTracing.RelayClientTracer).pipe(
      Effect.provide(
 -      relayLayer(
 -        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
 -        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
--      ).pipe(
+-      ).pipe(Layer.provide(ManagedPolicy.layerTest(policy)), Layer.provide(FetchHttpClient.layer)),
 +      relayLayer({
 +        serviceName: "t3code-server",
 +        runtime: "node",
 +        client: "environment-server",
-+      }).pipe(
-         Layer.provide(ManagedPolicy.layerTest(policy)),
-         Layer.provide(
-           ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
-@@ -30,9 +31,9 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
++      }).pipe(Layer.provide(ManagedPolicy.layerTest(policy)), Layer.provide(FetchHttpClient.layer)),
+     ),
      Effect.map(Option.isSome),
    );
  
@@ -406,8 +452,24 @@ index 34fcaa74..e987f7f4 100644
      assert.isFalse(
        yield* tracesTo({
          schemaVersion: 1,
+@@ -50,10 +51,11 @@ it.effect("relay tracing waits for the desktop shell's telemetry opt-out", () =>
+     ),
+     Layer.effectDiscard,
+     Layer.provide(
+-      relayLayer(
+-        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
+-        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
+-      ),
++      relayLayer({
++        serviceName: "t3code-server",
++        runtime: "node",
++        client: "environment-server",
++      }),
+     ),
+     Layer.provide(ManagedPolicy.layerTest()),
+     Layer.provide(Layer.succeed(HostProcess.Environment, environment)),
 diff --git a/apps/server/src/relay/AgentAwarenessRelay.ts b/apps/server/src/relay/AgentAwarenessRelay.ts
-index ef2e3479..19f1c8c5 100644
+index 2eed87a8..efa9ef41 100644
 --- a/apps/server/src/relay/AgentAwarenessRelay.ts
 +++ b/apps/server/src/relay/AgentAwarenessRelay.ts
 @@ -49,6 +49,7 @@ import {
@@ -418,7 +480,7 @@ index ef2e3479..19f1c8c5 100644
  import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
  import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
  import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
-@@ -446,6 +447,9 @@ export const make = Effect.gen(function* () {
+@@ -450,6 +451,9 @@ export const make = Effect.gen(function* () {
        );
  
    const readRelayConfig = Effect.gen(function* () {
@@ -428,7 +490,7 @@ index ef2e3479..19f1c8c5 100644
      const [url, issuer, environmentCredential] = yield* Effect.all([
        readSecretString(RELAY_URL_SECRET),
        readSecretString(RELAY_ISSUER_SECRET),
-@@ -456,9 +460,11 @@ export const make = Effect.gen(function* () {
+@@ -460,9 +464,11 @@ export const make = Effect.gen(function* () {
        : null;
    });
  
@@ -444,10 +506,10 @@ index ef2e3479..19f1c8c5 100644
    const makeRelayClient = (relayConfig: {
      readonly url: string;
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 47c4a4c9..b9cad5c7 100644
+index 13db759c..eeed3a4b 100644
 --- a/apps/server/src/server.ts
 +++ b/apps/server/src/server.ts
-@@ -1103,6 +1103,13 @@ const layerMakeServer = Layer.unwrap(
+@@ -1185,6 +1185,13 @@ const layerMakeServer = Layer.unwrap(
      const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
        Effect.gen(function* () {
          const cloudLink = yield* CloudLink.CloudLink;
