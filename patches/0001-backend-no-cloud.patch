@@ -66,7 +66,7 @@ index 2ae78f27..161ee838 100644
    );
  
 diff --git a/apps/server/src/cli/connect.test.ts b/apps/server/src/cli/connect.test.ts
-index 630fe7cb..6693d214 100644
+index d591cb31..6693d214 100644
 --- a/apps/server/src/cli/connect.test.ts
 +++ b/apps/server/src/cli/connect.test.ts
 @@ -1,34 +1,9 @@
@@ -104,7 +104,7 @@ index 630fe7cb..6693d214 100644
  
  const managedExecutable = {
    status: "available",
-@@ -65,216 +40,3 @@ it.effect("does not install the relay client when the user declines the managed
+@@ -65,278 +40,3 @@ it.effect("does not install the relay client when the user declines the managed
      assert.equal(installCalls, 0);
    }),
  );
@@ -318,6 +318,68 @@ index 630fe7cb..6693d214 100644
 -        assert.include(printed, "T3 Connect is disabled locally.");
 -        assert.notInclude(warnings.join("\n"), "cloudflared process");
 -      }),
+-    );
+-  },
+-);
+-
+-it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))(
+-  "t3 connect link next step",
+-  (it) => {
+-    it.effect("tells the user to restart a server that is already running, not to start one", () =>
+-      Effect.gen(function* () {
+-        const fs = yield* FileSystem.FileSystem;
+-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-connect-link-test-" });
+-        const relayClientPath = `${baseDir}/bin/cloudflared`;
+-        yield* fs.makeDirectory(`${baseDir}/bin`, { recursive: true });
+-        yield* fs.writeFileString(
+-          relayClientPath,
+-          `#!/bin/sh\necho "cloudflared version ${RelayClient.CLOUDFLARED_VERSION}"\n`,
+-        );
+-        yield* fs.chmod(relayClientPath, 0o755);
+-        yield* fs.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
+-        yield* fs.writeFileString(
+-          `${baseDir}/userdata/secrets/cloud-cli-oauth-token.bin`,
+-          JSON.stringify({
+-            accessToken: "access",
+-            refreshToken: "refresh",
+-            expiresAtEpochMs: 4_102_444_800_000,
+-            identity: "user@example.com",
+-          }),
+-        );
+-        const state = yield* makePersistedServerRuntimeState({
+-          config: { host: "127.0.0.1", devUrl: undefined },
+-          port: 3773,
+-        });
+-        yield* persistServerRuntimeState({
+-          path: `${baseDir}/userdata/server-runtime.json`,
+-          state: { ...state, pid: process.pid },
+-        });
+-
+-        yield* Command.runWith(makeCli({ cloudEnabled: true }), { version: "0.0.0" })([
+-          "connect",
+-          "link",
+-          "--headless",
+-          "--base-dir",
+-          baseDir,
+-        ]).pipe(
+-          Effect.provide(
+-            ConfigProvider.layer(
+-              ConfigProvider.fromEnv({ env: { T3CODE_CLOUDFLARED_PATH: relayClientPath } }),
+-            ),
+-          ),
+-        );
+-
+-        const printed = (yield* TestConsole.logLines).join("\n");
+-        const restart = yield* resolveHostCliCommand("service restart", ["--base-dir", baseDir]);
+-        const serve = yield* resolveHostCliCommand("serve", ["--base-dir", baseDir]);
+-        assert.include(printed, "✓ Authorized as user@example.com");
+-        assert.include(printed, `\`${restart.command}\``);
+-        assert.notInclude(printed, `\`${serve.command}\``);
+-      }).pipe(
+-        Effect.scoped,
+-        Effect.provideService(HostProcess.Environment, {}),
+-        Effect.provide(Layer.fresh(TestConsole.layer)),
+-      ),
 -    );
 -  },
 -);
