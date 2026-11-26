@@ -1,16 +1,16 @@
 diff --git a/apps/web/src/components/settings/DiagnosticsSettings.tsx b/apps/web/src/components/settings/DiagnosticsSettings.tsx
-index 75817a6e..8ec42be1 100644
+index 878f9e85..f5150753 100644
 --- a/apps/web/src/components/settings/DiagnosticsSettings.tsx
 +++ b/apps/web/src/components/settings/DiagnosticsSettings.tsx
-@@ -50,7 +50,6 @@ import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
+@@ -53,7 +53,6 @@ import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
  import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
  import { useAtomCommand } from "../../state/use-atom-command";
  import { useSettingsScope } from "./SettingsScopeContext";
 -import { TelemetryExportSettings } from "./TelemetryExportSettings";
+ import { SharedTooltipTrigger } from "../ui/shared-tooltip";
  
  const NUMBER_FORMAT = new Intl.NumberFormat();
- 
-@@ -879,18 +878,6 @@ function DiagnosticsSettingsBody() {
+@@ -846,18 +845,6 @@ function DiagnosticsSettingsBody() {
    const isInitialLoading = isPending && data === null;
    const isProcessInitialLoading = isProcessPending && processData === null;
    const isResourceInitialLoading = isResourcePending && resourceData === null;
@@ -29,7 +29,7 @@ index 75817a6e..8ec42be1 100644
    const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
      const targetEnvironmentId = environmentId;
      const process = processData?.processes.find((entry) => entry.pid === pid);
-@@ -1442,7 +1429,6 @@ function DiagnosticsSettingsBody() {
+@@ -1409,7 +1396,6 @@ function DiagnosticsSettingsBody() {
            />
          )}
        </SettingsSection>
