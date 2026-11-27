@@ -523,7 +523,7 @@ diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/
 index 6a27e37e1e..26825f09a3 100644
 --- a/apps/web/src/components/chat/GuestShareControls.tsx
 +++ b/apps/web/src/components/chat/GuestShareControls.tsx
-@@ -149,7 +149,8 @@ function GuestShareDialog({
+@@ -150,7 +150,8 @@ function GuestShareDialog({
              </T>{" "}
              {autoApprove
                ? gt("Their messages go straight to the agent.")
