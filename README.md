@@ -144,8 +144,11 @@ artifacts.
 
 `typecheck-patches.sh` installs the server dependency graph on first use and
 then runs `tsc` over `t3` and `@t3tools/shared`, which covers the server and
-shared TypeScript files the series rewrites. The small web and mobile edits are
-covered by their own build steps.
+shared TypeScript files the series rewrites. It also checks the web files the
+series touches for names they use without importing: the web workspace has no
+typecheck script, and its build strips types without checking them, so a missing
+import would otherwise only fail when that component renders. The mobile edits
+are covered by their own build steps.
 
 To check the series against another upstream tag:
 
