@@ -439,10 +439,18 @@ index 15ac7ec..b5f6c3a 100644
      case "thread.settle":
      case "thread.auto-settle":
 diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/components/chat/GuestShareControls.tsx
-index e8b34d9..370c6ed 100644
+index e055e80d..6a27e37e 100644
 --- a/apps/web/src/components/chat/GuestShareControls.tsx
 +++ b/apps/web/src/components/chat/GuestShareControls.tsx
-@@ -25,6 +25,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
+@@ -16,6 +16,7 @@ import { useState } from "react";
+ 
+ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+ import { useDeadlinePassed } from "~/hooks/useDeadline";
++import { useNowMinute } from "~/hooks/useNowMinute";
+ import { appAtomRegistry } from "~/rpc/atomRegistry";
+ import { useQuietThreadProjection } from "~/state/entities";
+ import { serverEnvironment } from "~/state/server";
+@@ -25,6 +26,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
  import { cn } from "~/lib/utils";
  import { useOrchestrationCommand } from "~/state/use-orchestration-command";
  import { Button } from "../ui/button";
@@ -450,7 +458,7 @@ index e8b34d9..370c6ed 100644
  import {
    Dialog,
    DialogDescription,
-@@ -79,6 +80,10 @@ function GuestShareDialog({
+@@ -79,6 +81,10 @@ function GuestShareDialog({
    const createGuestShare = useAtomCommand(serverEnvironment.createGuestShare, {
      reportFailure: false,
    });
@@ -461,7 +469,7 @@ index e8b34d9..370c6ed 100644
    const { copyToClipboard, isCopied } = useCopyToClipboard({
      target: {
        target: "guest link",
-@@ -87,12 +92,28 @@ function GuestShareDialog({
+@@ -87,12 +93,28 @@ function GuestShareDialog({
      },
    });
    const [state, setState] = useState<CreateState>({ status: "idle" });
@@ -491,7 +499,7 @@ index e8b34d9..370c6ed 100644
      });
      if (result._tag === "Success") {
        setState({ status: "created", url: result.value.url });
-@@ -124,11 +145,33 @@ function GuestShareDialog({
+@@ -124,11 +146,33 @@ function GuestShareDialog({
            <DialogDescription>
              <T>
                The guest sees the thread as you do, including command output and the agent&apos;s
@@ -527,7 +535,7 @@ index e8b34d9..370c6ed 100644
            {state.status === "created" ? (
              <div className="flex items-center gap-2">
                <Input
-@@ -149,6 +192,14 @@ function GuestShareDialog({
+@@ -149,6 +193,14 @@ function GuestShareDialog({
                  : gt("The link works once and expires in 24 hours.")}
              </p>
            )}

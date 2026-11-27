@@ -3,7 +3,8 @@
 #
 # A patch can keep applying cleanly and still reference a symbol upstream
 # renamed or removed. `git apply` and verify-strip.sh cannot see that, but tsc
-# can, so the release preflight, the drift fixer, and CI run this.
+# can, so the release preflight, the drift fixer, and CI run this. The web
+# project has its own typecheck task, so this runs it too.
 #
 # Requires `vp` on PATH (see https://viteplus.dev); the caller installs it.
 set -euo pipefail
@@ -20,4 +21,4 @@ fi
 # the same workspace graph the CLI build uses; the server tsconfig also includes
 # `../../scripts/lib`, which needs the scripts workspace's dependencies.
 vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
-vp run --filter t3 --filter @t3tools/shared typecheck
+vp run --filter t3 --filter @t3tools/shared --filter @t3tools/web typecheck
