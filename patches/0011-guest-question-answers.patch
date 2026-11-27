@@ -520,7 +520,7 @@ index 008666369e..7d27bcf3c6 100644
    renderRoute,
    itemRoute,
 diff --git a/apps/web/src/components/chat/GuestShareControls.tsx b/apps/web/src/components/chat/GuestShareControls.tsx
-index 370c6ed9f2..cfd51a11ab 100644
+index 6a27e37e1e..26825f09a3 100644
 --- a/apps/web/src/components/chat/GuestShareControls.tsx
 +++ b/apps/web/src/components/chat/GuestShareControls.tsx
 @@ -149,7 +149,8 @@ function GuestShareDialog({

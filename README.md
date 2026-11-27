@@ -142,13 +142,11 @@ artifacts.
 ./scripts/typecheck-patches.sh /path/to/upstream-checkout
 ```
 
-`typecheck-patches.sh` installs the server dependency graph on first use and
-then runs `tsc` over `t3` and `@t3tools/shared`, which covers the server and
-shared TypeScript files the series rewrites. It also checks the web files the
-series touches for names they use without importing: the web workspace has no
-typecheck script, and its build strips types without checking them, so a missing
-import would otherwise only fail when that component renders. The mobile edits
-are covered by their own build steps.
+`typecheck-patches.sh` installs the workspace dependency graph on first use and
+then runs the typecheck task for `t3`, `@t3tools/shared`, and `@t3tools/web`,
+which covers the server, shared, and web TypeScript files the series rewrites.
+Leaving web out previously let a missing import build and crash when that
+component rendered. The mobile edits are covered by their own build steps.
 
 To check the series against another upstream tag:
 
