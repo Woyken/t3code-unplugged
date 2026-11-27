@@ -39,7 +39,7 @@ permissions:
 jobs:
   plan:
     name: Plan targets
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       linux: ${{ steps.plan.outputs.linux }}
@@ -110,7 +110,7 @@ jobs:
     name: Verify patch series
     needs: plan
     if: needs.plan.outputs.any == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -504,7 +504,7 @@ jobs:
     name: Android APK
     needs: [plan, preflight]
     if: needs.plan.outputs.android == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 150
     env:
       APP_VARIANT: production
@@ -586,7 +586,7 @@ jobs:
     name: Web client
     needs: [plan, preflight]
     if: needs.plan.outputs.web == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

@@ -47,7 +47,7 @@ concurrency:
 jobs:
   detect:
     name: Detect drift
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     if: |
       github.event_name != 'workflow_run' ||
@@ -379,7 +379,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' && inputs.force == true)) &&
       (needs.detect.outputs.fix_attempted != 'true' ||
        (github.event_name == 'workflow_dispatch' && inputs.force == true))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -641,7 +641,7 @@ jobs:
       inputs.dry_run != true &&
       (needs.detect.outputs.existing_pr == '' ||
        (github.event_name == 'workflow_dispatch' && inputs.force == true))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: write
@@ -832,7 +832,7 @@ jobs:
       (needs.detect.outputs.merged_pr == '' ||
        (github.event_name == 'workflow_dispatch' && inputs.force == true)) &&
       (needs.publish.outputs.pr_url != '' || needs.detect.outputs.existing_pr != '')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: write
@@ -1058,7 +1058,7 @@ jobs:
     name: Report drift
     needs: [detect, fix, publish, merge]
     if: always() && needs.detect.outputs.mode != 'none' && needs.detect.outputs.tag != ''
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
