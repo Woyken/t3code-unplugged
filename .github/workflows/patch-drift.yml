@@ -362,7 +362,7 @@ jobs:
 
       - name: Upload failure details
         if: steps.classify.outputs.mode != 'none'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-fix-input
           path: fix-input
@@ -398,7 +398,7 @@ jobs:
           persist-credentials: false
 
       - name: Download failure details
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: drift-fix-input
           path: fix-input
@@ -627,7 +627,7 @@ jobs:
 
       - name: Upload proposed fix
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-fix-proposal
           path: fix-input
@@ -662,7 +662,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Download proposed fix
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: drift-fix-proposal
           path: ${{ runner.temp }}/drift-proposal
