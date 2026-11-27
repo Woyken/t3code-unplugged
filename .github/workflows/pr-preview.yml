@@ -249,7 +249,7 @@ jobs:
           EOF
 
       - name: Create preview release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           # Tag the commit that was actually built, not the pull_request merge
